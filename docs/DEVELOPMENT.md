@@ -123,9 +123,10 @@ Other dialogs (New profile, Prune, Resources, Pull image, Delete): click the tri
 ### Rust
 
 - Shelling commands are `async`, wrapped in `blocking(...)`; a synchronous `Command::output()` freezes the webview.
+- Never call `Command::output()` directly. Go through `proc::run(cmd, limit)`, which drains both pipes on threads and kills the child at the deadline: a wedged daemon would otherwise park the caller for good, and enough parked callers drain the blocking pool until the window needs a force quit. `proc::READ_LIMIT` (20 s) is for lists, status, inspect and log tails; `proc::ACTION_LIMIT` (120 s) for start/stop/remove/prune of a container or network; `proc::NO_LIMIT` for what legitimately takes minutes with no interim output — `docker pull`, `colima start`, `podman machine start`, and the guest scans behind Cleanup.
 - Pass arguments as arrays; never build shell strings.
 - Register new commands in `tauri::generate_handler!` or the frontend cannot call them.
-- Prefer an empty list for optional tools; errors are for what the user can act on.
+- Prefer an empty list for optional tools; errors are for what the user can act on. An optional plugin (compose) must never gate a required list.
 - Keep CLI parsing in the module that owns that CLI and unit-test non-obvious parsers.
 
 ### Dependency gates

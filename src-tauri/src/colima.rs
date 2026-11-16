@@ -85,12 +85,24 @@ pub fn resolve_colima_home(colima_home: Option<&str>, home: &str, xdg: Option<&s
     }
 }
 
-/// A `colima` read. `list`, `status`, `version` and `ssh-config` all answer from local
-/// state, so the read deadline is generous rather than tight.
+/// A `colima` read. `list`, `status`, `version` and `ssh-config` answer from local state,
+/// so the read deadline is generous rather than tight.
 pub fn run(args: &[&str]) -> Result<String, String> {
+    run_with(args, crate::proc::READ_LIMIT)
+}
+
+/// A start, stop, restart, delete, prune, update, model pull or model run: minutes of
+/// legitimate work with no progress output. Killing one mid-flight is worse than waiting —
+/// a killed `colima start` leaves a half-provisioned VM and a killed pull a partial layer —
+/// so these carry no deadline.
+fn run_action(args: &[&str]) -> Result<String, String> {
+    run_with(args, crate::proc::NO_LIMIT)
+}
+
+fn run_with(args: &[&str], limit: Option<Duration>) -> Result<String, String> {
     let mut cmd = Command::new(colima_bin());
     cmd.args(args);
-    let out = crate::proc::run(&mut cmd, crate::proc::READ_LIMIT).map_err(|e| e.to_string())?;
+    let out = crate::proc::run(&mut cmd, limit).map_err(|e| e.to_string())?;
     if out.success {
         Ok(out.stdout)
     } else {
@@ -166,9 +178,11 @@ pub struct Profile {
 /// TTL keeps it honest for everyone else (the 15 s refresh still reads the CLI).
 static LIST_GATE: Mutex<()> = Mutex::new(());
 static LIST_CACHE: RwLock<Option<(Instant, Vec<Profile>)>> = RwLock::new(None);
-/// Longer than a CLI run, far shorter than a refresh cycle, so a profile started or
-/// stopped by another window cannot hide behind it.
-const LIST_TTL: Duration = Duration::from_secs(3);
+/// Longer than a CLI run, shorter than a refresh cycle, so a profile started or
+/// stopped by another window cannot hide behind it. The refresh itself runs every 15 s
+/// (60 s with the event stream), so a shorter TTL could never serve two consecutive waves;
+/// every path that changes the list calls `invalidate_profiles()` anyway.
+const LIST_TTL: Duration = Duration::from_secs(10);
 
 pub fn list_profiles() -> Result<Vec<Profile>, String> {
     let _gate = LIST_GATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -189,6 +203,10 @@ pub fn list_profiles() -> Result<Vec<Profile>, String> {
 /// Drops the cached list: the set of profiles or one profile's state just changed.
 pub fn invalidate_profiles() {
     if let Ok(mut slot) = LIST_CACHE.write() {
+        *slot = None;
+    }
+    // A start, stop or delete changes the status too; never let it outlive the mutation.
+    if let Ok(mut slot) = STATUS_CACHE.write() {
         *slot = None;
     }
 }
@@ -232,7 +250,20 @@ pub struct Status {
     pub disk: Option<u64>,
 }
 
+/// `colima status --json` costs 720–950 ms — two to three times `colima list --json` — and
+/// answers almost nothing the list did not: only the sockets, driver, mount type and display
+/// name. It sits on the mount path, on every ⌘R and, through `act()`, on every mutation, where
+/// it kept the header spinner and the disabled buttons up ~800 ms after the data had landed.
+static STATUS_CACHE: RwLock<Option<(Instant, String, Status)>> = RwLock::new(None);
+
 pub fn status(profile: &str) -> Result<Status, String> {
+    if let Ok(slot) = STATUS_CACHE.read() {
+        if let Some((at, cached_profile, cached)) = slot.as_ref() {
+            if cached_profile == profile && at.elapsed() < LIST_TTL {
+                return Ok(cached.clone());
+            }
+        }
+    }
     let raw = if profile == "default" {
         run(&["status", "--json"])?
     } else {
@@ -244,7 +275,11 @@ pub fn status(profile: &str) -> Result<Status, String> {
         if t.starts_with('{') { json = t.to_string(); break; }
     }
     if json.is_empty() { json = raw.trim().to_string(); }
-    serde_json::from_str(&json).map_err(|e| format!("parse status: {e}"))
+    let parsed: Status = serde_json::from_str(&json).map_err(|e| format!("parse status: {e}"))?;
+    if let Ok(mut slot) = STATUS_CACHE.write() {
+        *slot = Some((Instant::now(), profile.to_string(), parsed.clone()));
+    }
+    Ok(parsed)
 }
 
 pub fn version() -> String {
@@ -341,7 +376,7 @@ pub fn model_pull(profile: &str, model: &str, runner: &str) -> Result<String, St
     let mut a: Vec<&str> = vec!["model", "pull", model];
     if !runner.is_empty() && runner != "docker" { a.push("--runner"); a.push(runner); }
     if profile != "default" { a.push("-p"); a.push(profile); }
-    run(&a)
+    run_action(&a)
 }
 
 pub fn model_setup(profile: &str, runner: &str) -> Result<String, String> {
@@ -349,7 +384,7 @@ pub fn model_setup(profile: &str, runner: &str) -> Result<String, String> {
     let mut a: Vec<&str> = vec!["model", "setup"];
     if !runner.is_empty() && runner != "docker" { a.push("--runner"); a.push(runner); }
     if profile != "default" { a.push("-p"); a.push(profile); }
-    run(&a)
+    run_action(&a)
 }
 
 /// Opens an interactive chat session in Terminal.app (GUI cannot host a TTY).
@@ -416,7 +451,7 @@ pub fn rosetta_applies(vm_type: Option<&str>) -> bool {
 /// A command that starts, stops, restarts or removes a profile: the list the window reads
 /// next is different, so the cached read must not outlive it.
 fn run_mutation(args: &[&str]) -> Result<String, String> {
-    let out = run(args);
+    let out = run_action(args);
     invalidate_profiles();
     out
 }
@@ -472,14 +507,14 @@ pub fn model_run(profile: &str, model: &str, prompt: &str, runner: &str) -> Resu
     if !prompt.trim().is_empty() { a.push(prompt); }
     if !runner.is_empty() && runner != "docker" { a.push("--runner"); a.push(runner); }
     if profile != "default" { a.push("-p"); a.push(profile); }
-    run(&a)
+    run_action(&a)
 }
 
 /// Serve starts a blocking web server; launch detached and return immediately.
 
 pub fn prune(profile: &str) -> Result<String, String> {
     let a: Vec<&str> = if profile == "default" { vec!["prune"] } else { vec!["prune", "-p", profile] };
-    run(&a)
+    run_action(&a)
 }
 
 /// `colima update` updates the container runtime *inside* the VM. It is not a
@@ -487,7 +522,7 @@ pub fn prune(profile: &str) -> Result<String, String> {
 /// default profile whatever profile the UI has selected, so always pass it.
 pub fn update(profile: &str) -> Result<String, String> {
     let a: Vec<&str> = if profile == "default" { vec!["update"] } else { vec!["update", "-p", profile] };
-    run(&a)
+    run_action(&a)
 }
 
 #[derive(Serialize, Default)]
