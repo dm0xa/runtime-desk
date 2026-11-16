@@ -85,16 +85,38 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           set -eu
           tag="${{ github.ref_name }}"
+          # The product name is read from the tag, not from a literal: the app was
+          # renamed once and the release title plus asset names follow tauri.conf.json.
+          name=$(gh api "repos/${GH_REPO}/contents/src-tauri/tauri.conf.json?ref=${tag}" \
+            -H "Accept: application/vnd.github.raw" | jq -r .productName)
           ls -l dmg
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "::error::release $tag already exists, and an immutable release cannot accept assets afterwards — delete the release and push the tag again"
             exit 1
           fi
+          # Checksums ship with the release: an immutable release can never gain them
+          # later, and the Homebrew cask needs one per architecture to pin a sha256.
+          # GitHub rewrites spaces in asset names to dots, so the checksum lines name
+          # the asset as it will be downloadable, not as it sits on disk.
+          (cd dmg && for f in *.dmg; do
+            printf '%s  %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$(printf '%s' "$f" | tr ' ' '.')"
+          done > SHA256SUMS.txt && cat SHA256SUMS.txt)
           gh release create "$tag" \
             --verify-tag \
-            --title "Colima Desk $tag" \
+            --title "$name $tag" \
             --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)." \
-            dmg/*
+            dmg/*.dmg dmg/SHA256SUMS.txt
+
+      - name: keep the Homebrew cask current
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "no TAP_TOKEN secret: the cask bump workflow in dm0xa/homebrew-tap picks this up on its schedule"
+            exit 0
+          fi
+          gh workflow run bump.yml -R dm0xa/homebrew-tap

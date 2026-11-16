@@ -65,6 +65,18 @@ Building needs Rust, Node.js 20.19+ or 22.12+ and the Xcode command line tools; 
 
 ## Run it
 
+### With Homebrew
+
+```sh
+brew install --cask dm0xa/tap/runtime-desk
+brew upgrade --cask runtime-desk      # when a newer release is out
+brew uninstall --cask runtime-desk    # add --zap to drop preferences too
+```
+
+Homebrew asks once to trust the tap (`brew trust --cask dm0xa/tap/runtime-desk`). The cask downloads the newest release from this repository, so it needs no update here. The build is ad-hoc signed rather than notarized: the cask removes the quarantine flag only when the signature really is ad-hoc, which is why Gatekeeper stays quiet on first open.
+
+### From source
+
 ```sh
 git clone https://github.com/dm0xa/runtime-desk.git
 cd runtime-desk
