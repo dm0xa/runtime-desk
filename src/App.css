@@ -1812,7 +1812,8 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 .inv-crumb.current { color: var(--text); cursor: default; font-weight: 600; }
 .inv-crumb-sep { color: var(--muted); }
 .inv-files { display: flex; flex-direction: column; max-height: 440px; overflow-y: auto; }
-.inv-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 154px; gap: 12px; align-items: center; padding: 5px 2px; box-shadow: inset 0 -1px 0 var(--sep); }
+/* Past a page of entries, rows below the fold skip layout and paint until scrolled to. */
+.inv-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 154px; gap: 12px; align-items: center; padding: 5px 2px; box-shadow: inset 0 -1px 0 var(--sep); content-visibility: auto; contain-intrinsic-size: auto 28px; }
 .inv-file-row:last-child { box-shadow: none; }
 .inv-file-name-btn { display: flex; align-items: center; gap: 8px; min-width: 0; background: none; border: none; padding: 0; font: inherit; font-size: 12.5px; color: var(--link); text-align: left; cursor: pointer; }
 .inv-file-name-btn.static { color: var(--text); cursor: default; }

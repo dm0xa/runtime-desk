@@ -184,7 +184,7 @@ Name, size, driver, mountpoint, **Used by**, actions. A treemap above the table 
 - The bin in **Actions** is disabled while a container mounts it or the container list failed to answer.
 - **Investigate** shows driver, scope, size, creation time, mountpoint, options, labels, and the containers mounting it with each path.
 
-Files can be browsed on the Sherlock page under **Contents**: read-only, one directory at a time, through `colima ssh`, from the client's mountpoint.
+Files can be browsed on the Sherlock page under **Contents**: read-only, one directory at a time, through `colima ssh`, from the client's mountpoint. A level reads and shows its first 200 entries with **Show 200 more** beneath — a directory holding thousands of files no longer stalls the page or crosses the IPC boundary whole — and directories are read again only when you reload them.
 
 ## Networks
 

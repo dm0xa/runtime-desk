@@ -5,6 +5,11 @@ import { fmtSize } from "../lib/format";
 import { FileIcon, FolderIcon } from "./icons";
 import { RefreshIcon } from "./RefreshIcon";
 
+/** Rows drawn before the browser offers the next page. Comfortably past one screen. */
+const ENTRY_PAGE = 200;
+/** The backend's cap: there is no reason to ask for more than it will send. */
+const MAX_PAGE = 5000;
+
 /**
  * One directory level of a volume, read-only through `colima ssh -- sudo find`.
  * Directories navigate in place; nothing here writes to the volume.
@@ -26,11 +31,20 @@ export function VolumeContents({ profile, name }: { profile: string; name: strin
   const [nonce, setNonce] = useState(0);
   const listing = listings.current.get(key) ?? null;
   const error = failure?.key === key ? failure.message : null;
+  // A node_modules-sized directory can hold thousands of entries; drawing all of them — or
+  // even sending them across the IPC boundary — wastes both. A level asks for one page plus
+  // a sentinel row that proves there is more, and "Show N more" asks for a bigger page.
+  const [reveal, setReveal] = useState({ key, n: ENTRY_PAGE });
+  const shown = reveal.key === key ? reveal.n : ENTRY_PAGE;
+  const wanted = Math.min(shown + 1, MAX_PAGE);
 
   useEffect(() => {
-    if (!name || listings.current.has(key)) return;
+    if (!name) return;
+    const cached = listings.current.get(key);
+    // Enough rows already in hand: either the page, or the whole directory.
+    if (cached && (cached.entries.length >= wanted || !cached.truncated)) return;
     let alive = true;
-    invoke<Listing>("volume_contents_cmd", { profile, name, path: rel })
+    invoke<Listing>("volume_contents_cmd", { profile, name, path: rel, limit: wanted })
       .then((next) => {
         if (!alive) return;
         if (listings.current.size >= 16) {
@@ -42,7 +56,7 @@ export function VolumeContents({ profile, name }: { profile: string; name: strin
       })
       .catch((e) => { if (alive) setFailure({ key, message: String(e) }); });
     return () => { alive = false; };
-  }, [profile, name, rel, key, nonce]);
+  }, [profile, name, rel, key, nonce, wanted]);
 
   const reload = () => {
     listings.current.delete(key);
@@ -51,6 +65,7 @@ export function VolumeContents({ profile, name }: { profile: string; name: strin
 
   const crumbs = rel ? rel.split("/") : [];
   const count = listing?.entries.length ?? 0;
+  const more = shown < count || !!listing?.truncated;
 
   return (
     <section className="panel inv-wide">
@@ -87,7 +102,7 @@ export function VolumeContents({ profile, name }: { profile: string; name: strin
         ) : (
           <>
             <div className="inv-files">
-              {listing.entries.map((entry) => {
+              {listing.entries.slice(0, shown).map((entry) => {
                 const dir = entry.kind === "dir";
                 const label = (
                   <>
@@ -119,7 +134,12 @@ export function VolumeContents({ profile, name }: { profile: string; name: strin
                 );
               })}
             </div>
-            {listing.truncated && <p className="muted">first {count} entries shown</p>}
+            {more && (
+              <button className="btn inv-more" onClick={() => setReveal({ key, n: Math.min(shown + ENTRY_PAGE, MAX_PAGE) })}>
+                Show {Math.min(ENTRY_PAGE, MAX_PAGE - shown)} more
+              </button>
+            )}
+            {listing.truncated && <p className="muted">{shown} shown · more in this directory</p>}
           </>
         )
       ) : error ? (

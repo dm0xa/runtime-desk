@@ -340,10 +340,10 @@ async fn cleanup_report_cmd(profile: String) -> cleanup::CleanupReport {
 /// One directory level of a volume, read through `colima ssh -- sudo find`. The root comes
 /// from the active container client, so Docker and containerd profiles both resolve.
 #[tauri::command]
-async fn volume_contents_cmd(profile: String, name: String, path: String) -> R<colima::VolumeContents> {
+async fn volume_contents_cmd(profile: String, name: String, path: String, limit: Option<u32>) -> R<colima::VolumeContents> {
     blocking(move || {
         let root = docker::volume_mountpoint(&name)?;
-        colima::volume_contents(&profile, &root, &path)
+        colima::volume_contents(&profile, &root, &path, limit.unwrap_or(200) as usize)
     })
     .await
 }

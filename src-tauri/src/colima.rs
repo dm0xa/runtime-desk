@@ -828,7 +828,8 @@ fn parse_volume_entries(raw: &str) -> Vec<VolumeEntry> {
 
 /// Read-only listing of one volume directory through `colima ssh -- sudo find`, never a
 /// helper container: the volume lives in the VM's own tree, not on the host.
-pub fn volume_contents(profile: &str, root: &str, rel: &str) -> Result<VolumeContents, String> {
+pub fn volume_contents(profile: &str, root: &str, rel: &str, limit: usize) -> Result<VolumeContents, String> {
+    let cap = limit.clamp(1, MAX_ENTRIES);
     let path = volume_path(root, rel)?;
     let mut child = Command::new(colima_bin())
         .args(["ssh", "-p", profile, "--", "sudo", "find", &path])
@@ -848,9 +849,10 @@ pub fn volume_contents(profile: &str, root: &str, rel: &str) -> Result<VolumeCon
         })
     });
 
-    // Parse incrementally and stop at the cap. Reading the whole listing first would let a
-    // directory with millions of entries (which any container holding the volume can
-    // create) buffer tens of megabytes just to discard all but 5000 rows.
+    // Parse incrementally and stop one row past what the caller asked for. Reading the whole
+    // listing first would let a directory with millions of entries (which any container
+    // holding the volume can create) buffer tens of megabytes just to discard all but a page;
+    // the page is what the browser draws, so the page is what crosses the boundary.
     let mut entries = Vec::new();
     let mut truncated = false;
     if let Some(stdout) = child.stdout.take() {
@@ -869,8 +871,8 @@ pub fn volume_contents(profile: &str, root: &str, rel: &str) -> Result<VolumeCon
             if let Some(entry) = parse_volume_record(&text) {
                 entries.push(entry);
             }
-            // One row past the cap proves there is more; exactly the cap might be the end.
-            if entries.len() > MAX_ENTRIES || bytes >= MAX_BYTES {
+            // One row past the page proves there is more; exactly the page might be the end.
+            if entries.len() > cap || bytes >= MAX_BYTES {
                 truncated = true;
                 let _ = child.kill();
                 break;
@@ -883,10 +885,10 @@ pub fn volume_contents(profile: &str, root: &str, rel: &str) -> Result<VolumeCon
     if !status.success() && !truncated {
         return Err(humanize(&stderr));
     }
-    // The kept prefix is sorted, not the whole directory: ordering beyond the cap is lost
+    // The kept prefix is sorted, not the whole directory: ordering beyond the page is lost
     // either way, and the count in the UI says the list is partial.
     entries.sort_by_key(|e| (e.kind != "dir", e.name.to_lowercase()));
-    entries.truncate(MAX_ENTRIES);
+    entries.truncate(cap);
     Ok(VolumeContents {
         root: root.trim_end_matches('/').to_string(),
         path: rel.trim_matches('/').to_string(),
@@ -898,7 +900,7 @@ pub fn volume_contents(profile: &str, root: &str, rel: &str) -> Result<VolumeCon
 pub fn nerdctl_install(profile: &str) -> Result<String, String> {
     let mut a: Vec<&str> = vec!["nerdctl", "install"];
     if profile != "default" { a.push("-p"); a.push(profile); }
-    run(&a)
+    run_action(&a)
 }
 #[cfg(test)]
 mod tests {
