@@ -4,6 +4,26 @@ Every release of Runtime Desk, what it added and what it still cannot do. The fo
 is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+## 1.1.4 — 2026-11-16
+
+### Fixed
+
+- **A stuck daemon no longer freezes the window.** Every CLI call has a deadline now — 20 s for reads, two minutes for actions — while genuinely long work such as `colima start` or `docker pull` is allowed to finish. A suspended VM can no longer wedge the app into a force quit.
+- **List pages stopped claiming the engine was empty.** A missing compose plugin no longer blanks Containers, Images and Volumes, and an empty table now says whether a read failed, is still running, or a filter matched nothing.
+- **The AI page's buttons now switch the container client**, so docker calls follow the profile the header names.
+- **Podman volumes with an unreadable size table show `?`** and cannot be removed until the use count is known; container start and stop refresh the counts immediately.
+- **Smaller fixes:** Podman machine tags open Machines instead of a Sherlock page for something that does not exist, a Kubernetes filter whose chip disappeared falls back to All, Pods turn amber when not all are running, and a failing monitor query no longer refuses to start the app.
+
+### Changed
+
+- **A refresh does about half the work it used to.** One wave per profile replaces several overlapping ones, the docker wave starts beside `colima list` instead of behind it (634 → 345 ms measured here), and the profile status and list are cached for ten seconds.
+- **The Activity view streams from one `docker stats` child** at about 1 Hz instead of spawning a poll every two seconds, and the charts keep a true 72-second window.
+- **`docker events` sends two fields per line** — 30 bytes instead of 537 — and tells the window when it has ended, so the slow cadence only applies while no stream is live.
+- **Big lists draw less.** Logs mount 500 lines with **Show more**, volume directories load a page at a time, Podman containers and images draw 100 rows per page, and the Ports column shows three chips plus a `+N` badge.
+- **Sherlock keeps its live panel across a refresh**, labels real elapsed time instead of assuming one second per sample, and loads one container's stats when a row expands rather than the whole list.
+
 ## 1.1.3 — 2026-11-16
 
 ### Changed
