@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { VolumeSize } from "../types";
 import { fmtSize } from "../lib/format";
 
@@ -75,6 +76,10 @@ export function VolumeTreemap({ items, loading = false, onOpen, highlight, sourc
   action?: string;
 }) {
   const sized = items.filter((v) => v.size > 0);
+  // The layout is O(n²) and only depends on the items, not on a hover or a parent re-render.
+  const cells = useMemo(() => squarify(sized), [items]);
+  const total = useMemo(() => sized.reduce((n, v) => n + v.size, 0), [items]);
+  const largest = sized[0]?.size ?? 1;
   // Keep the last drawn map during a background refresh; only the first scan needs a placeholder.
   if (sized.length === 0 && !loading) return null;
   if (sized.length === 0) {
@@ -103,9 +108,6 @@ export function VolumeTreemap({ items, loading = false, onOpen, highlight, sourc
       </section>
     );
   }
-  const cells = squarify(sized);
-  const total = sized.reduce((n, v) => n + v.size, 0);
-  const largest = sized[0]?.size ?? 1;
 
   return (
     <section className="panel volume-map-panel">

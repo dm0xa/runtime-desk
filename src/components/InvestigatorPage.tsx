@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Container,
@@ -898,7 +898,9 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
   useEffect(() => { input.current?.focus(); }, []);
 
   const attached = new Map(netMap.map((n) => [n.name, n.containers.length]));
-  const groups: { kind: Subject["kind"]; entries: AssetEntry[] }[] = [
+  // Built once per data change, not once per keystroke: four sorts plus a mount scan per
+  // volume is the whole index, and the query only narrows it.
+  const groups: { kind: Subject["kind"]; entries: AssetEntry[] }[] = useMemo(() => [
     {
       kind: "container",
       entries: [...containers]
@@ -935,7 +937,7 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
           return { subject: { kind: "network", id: n.name }, label: n.name, meta: `${n.driver}${count ? ` · ${count} attached` : ""}` };
         }),
     },
-  ];
+  ], [containers, images, volumes, networks, netMap]);
 
   const q = query.trim().toLowerCase();
   const visible = groups

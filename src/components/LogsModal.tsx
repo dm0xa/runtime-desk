@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Select } from "./Select";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, XIcon } from "./icons";
 import { RefreshIcon } from "./RefreshIcon";
@@ -7,6 +7,9 @@ import { Highlight } from "./Highlight";
 import { isKubernetesName } from "../lib/origin";
 
 type LogLine = { n: number; time: string; text: string; level: "error" | "warn" | "info" | null };
+
+/** Lines mounted at once; a longer tail is read page by page. */
+const LOG_PAGE = 500;
 
 /** Docker prefixes each line with an RFC3339 timestamp; ANSI colour codes come from
  *  the app inside the container and only add noise here. */
@@ -33,6 +36,26 @@ function parseLines(raw: string): LogLine[] {
     });
 }
 
+/** One rendered line. Memoized because a 5 000-line tail is rebuilt on every cursor move
+ *  and every keystroke otherwise, and only the two lines that changed need to re-render. */
+const LogRow = memo(function LogRow({ line, query, hit, current }: {
+  line: LogLine;
+  query: string;
+  hit: number | undefined;
+  current: boolean;
+}) {
+  return (
+    <div
+      className={`log-line ${line.level ? `log-${line.level}` : ""} ${current ? "current" : ""}`}
+      data-hit={hit}
+    >
+      <span className="log-n">{line.n}</span>
+      {line.time && <span className="log-ts">{line.time}</span>}
+      <span className="log-text"><Highlight text={line.text} query={query} /></span>
+    </div>
+  );
+});
+
 export function LogsModal({ name, tail, onClose, onLoad }: {
   name: string;
   tail: number;
@@ -47,6 +70,9 @@ export function LogsModal({ name, tail, onClose, onLoad }: {
   const [lines, setLines] = useState<number>(tail);
   const [cursor, setCursor] = useState(0);
   const [copied, setCopied] = useState(false);
+  // 5 000 lines at four nodes each is 20 000 elements mounted before the first paint; a page
+  // of 500 covers several screens, and `Match only` still filters the whole tail.
+  const [shown, setShown] = useState(LOG_PAGE);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   async function load(size: number) {
@@ -58,30 +84,46 @@ export function LogsModal({ name, tail, onClose, onLoad }: {
 
   const parsed = useMemo(() => parseLines(raw), [raw]);
   const needle = query.trim().toLowerCase();
-  const matches = useMemo(
-    () => (needle ? parsed.filter((l) => l.text.toLowerCase().includes(needle)) : []),
-    [parsed, needle],
-  );
+  // One pass for both answers: the match list drives jump/only-matches, the index stamps each
+  // row for scrolling. Two passes over a 5000-line tail was two full lowercases per keystroke.
+  const { matches, hitIndex } = useMemo(() => {
+    const found: LogLine[] = [];
+    const index = new Map<number, number>();
+    if (needle) {
+      for (const line of parsed) {
+        if (line.text.toLowerCase().includes(needle)) {
+          index.set(line.n, found.length);
+          found.push(line);
+        }
+      }
+    }
+    return { matches: found, hitIndex: index };
+  }, [parsed, needle]);
   const visible = onlyMatches && needle ? matches : parsed;
 
   useEffect(() => { setCursor(0); }, [needle, onlyMatches]);
+  useEffect(() => { setShown(LOG_PAGE); }, [visible]);
 
   function jump(delta: number) {
     if (!needle || matches.length === 0) return;
     const next = (cursor + delta + matches.length) % matches.length;
     setCursor(next);
-    const target = bodyRef.current?.querySelector<HTMLElement>(`[data-hit="${next}"]`);
-    target?.scrollIntoView({ block: "center" });
+    const line = matches[next];
+    const reveal = (index: number, attempt = 0) => {
+      const target = bodyRef.current?.querySelector<HTMLElement>(`[data-hit="${next}"]`);
+      if (target) {
+        target.scrollIntoView({ block: "center" });
+        return;
+      }
+      // The match sits past the mounted page: grow the page to it, then scroll next frame.
+      if (index < visible.length && attempt < 2) {
+        setShown(Math.min(visible.length, index + LOG_PAGE));
+        requestAnimationFrame(() => reveal(index, attempt + 1));
+      }
+    };
+    reveal(visible.findIndex((l) => l.n === line.n));
   }
 
-  const hitIndex = useMemo(() => {
-    const map = new Map<number, number>();
-    if (needle) {
-      let i = 0;
-      for (const l of parsed) if (l.text.toLowerCase().includes(needle)) map.set(l.n, i++);
-    }
-    return map;
-  }, [parsed, needle]);
   const currentLine = needle && matches.length ? matches[cursor]?.n : undefined;
 
   return (
@@ -147,17 +189,20 @@ export function LogsModal({ name, tail, onClose, onLoad }: {
 
         <div ref={bodyRef} className={`logs-body ${wrap ? "wrap" : "nowrap"}`}>
           {visible.length === 0 && <div className="logs-empty">{loading ? "Loading…" : needle ? "No lines match." : "(no output)"}</div>}
-          {visible.map((l) => (
-            <div
+          {visible.slice(0, shown).map((l) => (
+            <LogRow
               key={l.n}
-              className={`log-line ${l.level ? `log-${l.level}` : ""} ${currentLine === l.n ? "current" : ""}`}
-              data-hit={hitIndex.get(l.n)}
-            >
-              <span className="log-n">{l.n}</span>
-              {l.time && <span className="log-ts">{l.time}</span>}
-              <span className="log-text"><Highlight text={l.text} query={query.trim()} /></span>
-            </div>
+              line={l}
+              query={query.trim()}
+              hit={hitIndex.get(l.n)}
+              current={currentLine === l.n}
+            />
           ))}
+          {shown < visible.length && (
+            <button className="btn logs-more" onClick={() => setShown((n) => n + LOG_PAGE)}>
+              Show {Math.min(LOG_PAGE, visible.length - shown)} of {visible.length - shown} more
+            </button>
+          )}
         </div>
     </Dialog>
   );

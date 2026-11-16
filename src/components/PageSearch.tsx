@@ -106,16 +106,23 @@ export function PageSearch({ page, index, onAction, defaultScope }: Props) {
       setPos(null);
       return;
     }
-    const place = () => {
+    // Scroll fires at frame rate for any scrollable descendant and each measurement forces
+    // layout, so measure at most once per frame and only re-render when the box moved.
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
       const r = fieldRef.current?.getBoundingClientRect();
       if (!r) return;
       const width = Math.max(r.width, 320);
-      setPos({ top: r.bottom + 6, left: Math.max(12, r.right - width), width });
+      const next = { top: r.bottom + 6, left: Math.max(12, r.right - width), width };
+      setPos((prev) => (prev && prev.top === next.top && prev.left === next.left && prev.width === next.width ? prev : next));
     };
-    place();
+    const place = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    measure();
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };

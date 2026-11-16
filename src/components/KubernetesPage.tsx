@@ -141,6 +141,8 @@ export function KubernetesPage({ profile, profileRunning, refreshNonce }: {
     }
     let alive = true;
     const read = async () => {
+      // Six kubectl processes per call: a backgrounded window must not keep spawning them.
+      if (document.hidden) return;
       try {
         const next = await invoke<ClusterInfo>("k8s_cluster_cmd", { profile });
         if (alive) setInfo(next);
@@ -150,7 +152,8 @@ export function KubernetesPage({ profile, profileRunning, refreshNonce }: {
     };
     void read();
     const id = setInterval(() => void read(), INFO_EVERY_MS);
-    return () => { alive = false; clearInterval(id); };
+    document.addEventListener("visibilitychange", read);
+    return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", read); };
   }, [profile, profileRunning, refreshNonce, reload]);
 
   const reachable = !!info?.enabled && !!info?.reachable;
@@ -170,6 +173,7 @@ export function KubernetesPage({ profile, profileRunning, refreshNonce }: {
     }
     let alive = true;
     const read = async () => {
+      if (document.hidden) return;
       setLoadingRows(true);
       try {
         const next = await invoke<KubeRow[]>("k8s_resources_cmd", {
@@ -186,7 +190,8 @@ export function KubernetesPage({ profile, profileRunning, refreshNonce }: {
     };
     void read();
     const id = setInterval(() => void read(), ROWS_EVERY_MS);
-    return () => { alive = false; clearInterval(id); };
+    document.addEventListener("visibilitychange", read);
+    return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", read); };
   }, [profile, profileRunning, reachable, kind, namespace, refreshNonce, reload]);
 
   // A namespace deleted on the server must not leave the table asking for it forever.
