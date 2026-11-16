@@ -161,6 +161,8 @@ Timestamps from Docker's RFC3339 prefix, ANSI escapes removed. `FATAL`, `ERROR`,
 
 Each list has its own toolbar, and its filter is the one that matters for cleanup: **All / Unused** for images (no container references it) and volumes (no container mounts it), **All / User-defined** for networks (built-in ones cannot be removed). The page header keeps the **Prune unused data** broom and the network view switch.
 
+An empty table body says which of four things happened: **List unavailable** (a read failed), **Reading…** (no answer yet), **No matches.** (the header filter or a chip matched nothing), or **No `<kind>`** — the only wording that is a claim about the engine.
+
 ## Images
 
 ID, repository, tag, size, creation time, **Used by**.
@@ -242,7 +244,7 @@ Stored in the app's local storage keyed by entity kind and ID — containers, im
 ⌘K or ⌘F, or the magnifier in any header. The globe picks the scope:
 
 - **Off** — default on Containers, Images, Volumes, Networks and the Podman lists — filters the list in front of you.
-- **On** searches every page: visible sidebar sections, profiles, containers, images, volumes, networks and tags. Results appear under the field; the index is the same everywhere. Pages with nothing to filter, the Dashboard and Activity included, always search this way.
+- **On** searches every page: visible sidebar sections, profiles, containers, images, volumes, networks, Podman machines, containers, images, volumes and networks, and tags. Results appear under the field; the index is the same everywhere. Pages with nothing to filter, the Dashboard and Activity included, always search this way.
 
 Ranked: prefix matches, then word starts, then substrings; ties to the shorter label, at most 12 shown. Arrow keys move, `Enter` opens. A section switches tabs, a profile selects it, an entity opens in Sherlock, a Podman machine opens its machine list.
 

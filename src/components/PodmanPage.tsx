@@ -497,8 +497,8 @@ export function PodmanPage({ section, search, refreshNonce, netView, machine, al
                         <td>{fmtSize(v.size)}</td>
                         <td>{v.driver}</td>
                         <td><code className="cell-mono" title={v.mountpoint}>{v.mountpoint}</code></td>
-                        <td>{v.links === 0 ? <span className="muted">—</span> : `${v.links} container${v.links === 1 ? "" : "s"}`}</td>
-                        <td><div className="actions"><button className="icon-btn" title="Investigate" aria-label="Investigate" onClick={() => onInvestigate("volume", v.name)}><FingerprintIcon size={16} /></button><ConfirmButton label="Remove volume" icon={<TrashIcon size={14} />} disabled={busy || v.links > 0} title={v.links > 0 ? "Volume is used by a container" : "Remove volume"} onConfirm={() => { setBusy(true); invoke("podman_volume_remove_cmd", { name: v.name }).then(loadVolumes).then(() => onChanged()).catch((e) => setError(String(e))).finally(() => setBusy(false)); }} /></div></td>
+                        <td>{!v.links_known ? <span className="muted" title="The volume table could not be read">?</span> : v.links === 0 ? <span className="muted">—</span> : `${v.links} container${v.links === 1 ? "" : "s"}`}</td>
+                        <td><div className="actions"><button className="icon-btn" title="Investigate" aria-label="Investigate" onClick={() => onInvestigate("volume", v.name)}><FingerprintIcon size={16} /></button><ConfirmButton label="Remove volume" icon={<TrashIcon size={14} />} disabled={busy || !v.links_known || v.links > 0} title={!v.links_known ? "Use count unknown: not removable from here" : v.links > 0 ? "Volume is used by a container" : "Remove volume"} onConfirm={() => { setBusy(true); invoke("podman_volume_remove_cmd", { name: v.name }).then(loadVolumes).then(() => onChanged()).catch((e) => setError(String(e))).finally(() => setBusy(false)); }} /></div></td>
                       </tr>
                       {expanded === key && (
                         <tr className="detail-row">
@@ -509,7 +509,7 @@ export function PodmanPage({ section, search, refreshNonce, netView, machine, al
                                 <div className="detail-item"><span>Driver</span><div>{v.driver}</div></div>
                                 <div className="detail-item"><span>Mountpoint</span><code>{v.mountpoint || "—"}</code></div>
                                 <div className="detail-item"><span>Size</span><div>{fmtSize(v.size)}</div></div>
-                                <div className="detail-item"><span>Used by</span><div>{v.links} container{v.links === 1 ? "" : "s"}</div></div>
+                                <div className="detail-item"><span>Used by</span><div>{v.links_known ? `${v.links} container${v.links === 1 ? "" : "s"}` : "unknown"}</div></div>
                                 <div className="detail-item"><span>Created</span><div>{fmtDateTime(v.created_at) || "—"}</div></div>
                               </div>
                               <div className="detail-actions">

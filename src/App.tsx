@@ -539,10 +539,13 @@ function App() {
   });
   useEffect(() => { localStorage.setItem("runtimeDesk.order", JSON.stringify(order)); }, [order]);
   useEffect(() => {
-    // A filter whose tool disappeared would leave an empty, unexplained list.
+    // A filter whose tool disappeared would leave an empty, unexplained list. The Kubernetes
+    // chip is only drawn while the cluster reports pods, so a stopped or deleted cluster has
+    // to fall back to All rather than keep filtering to nothing.
     if (!tools) return;
     if (containerFilter === "compose" && !tools.compose) setContainerFilter("all");
-  }, [tools, containerFilter]);
+    if (containerFilter === "k8s" && !containers.some(isKubernetesContainer)) setContainerFilter("all");
+  }, [tools, containerFilter, containers]);
   useEffect(() => {
     if (!notices.some((n) => n.kind === "success")) return;
     const t = setTimeout(() => setNotices((list) => list.filter((n) => n.kind !== "success")), 5000);
@@ -2560,10 +2563,10 @@ function App() {
                     <div className="ai-need-actions">
                       {aiProfile ? (
                         <button className="btn primary" disabled={busy} onClick={() => {
-                          if (aiProfileRunning) { setSelected("ai"); return; }
+                          if (aiProfileRunning) { void chooseProfile("ai"); return; }
                           void act(async () => {
                             await invoke("start_cmd", { opts: { profile: "ai" } });
-                            setSelected("ai");
+                            await chooseProfile("ai");
                           });
                         }}>{aiProfileRunning ? "Open AI profile" : "Start AI profile"}</button>
                       ) : (
@@ -2573,7 +2576,10 @@ function App() {
                           title={tools && !tools.krunkit ? "Install krunkit first" : "Create a krunkit profile named ai"}
                           onClick={() => void act(async () => {
                             await invoke("start_cmd", { opts: { profile: "ai", cpus: 4, memory: 8, disk: 50, runtime: "docker", vm_type: "krunkit" } });
-                            setSelected("ai");
+                            // The new profile is a new daemon: select it through the same path
+                            // that repoints the client and reloads, or every docker call keeps
+                            // answering from the previous profile's socket.
+                            await chooseProfile("ai");
                           })}
                         >Create AI profile</button>
                       )}

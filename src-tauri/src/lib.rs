@@ -719,27 +719,28 @@ pub fn run() {
             // macOS keeps a window created larger than the display at that size, so on
             // smaller screens the configured geometry hangs off the right/bottom edge.
             // Only a frame that no monitor fully holds is moved: the cursor's monitor is
-            // not evidence about where the window belongs.
+            // not evidence about where the window belongs. Every failure here is cosmetic,
+            // so none of it may refuse the launch.
             if let Some(win) = app.get_webview_window("main") {
-                let inner = win.inner_size()?;
-                let outer = win.outer_size()?;
-                let position = win.outer_position()?;
-                let rect = tauri::PhysicalRect { position, size: outer };
-                let areas: Vec<_> = win.available_monitors()?.iter().map(|m| *m.work_area()).collect();
-                if !areas.iter().any(|area| fits_inside(area, &rect)) {
-                    let target = best_work_area(areas.iter(), &rect)
-                        .or_else(|| win.primary_monitor().ok().flatten().map(|m| *m.work_area()));
-                    if let Some(area) = target {
-                        let frame = (
-                            outer.width.saturating_sub(inner.width),
-                            outer.height.saturating_sub(inner.height),
-                        );
-                        if let Some(fit) = fit_to_work_area(inner, frame, position, &area) {
-                            win.set_size(fit.size)?;
-                            win.set_position(fit.position)?;
-                        }
+                let _ = (|| -> Option<()> {
+                    let inner = win.inner_size().ok()?;
+                    let outer = win.outer_size().ok()?;
+                    let position = win.outer_position().ok()?;
+                    let rect = tauri::PhysicalRect { position, size: outer };
+                    let areas: Vec<_> = win.available_monitors().ok()?.iter().map(|m| *m.work_area()).collect();
+                    if areas.iter().any(|area| fits_inside(area, &rect)) {
+                        return Some(());
                     }
-                }
+                    let area = best_work_area(areas.iter(), &rect)
+                        .or_else(|| win.primary_monitor().ok().flatten().map(|m| *m.work_area()))?;
+                    let frame = (
+                        outer.width.saturating_sub(inner.width),
+                        outer.height.saturating_sub(inner.height),
+                    );
+                    let fit = fit_to_work_area(inner, frame, position, &area)?;
+                    win.set_size(fit.size).ok()?;
+                    win.set_position(fit.position).ok()
+                })();
             }
             Ok(())
         })

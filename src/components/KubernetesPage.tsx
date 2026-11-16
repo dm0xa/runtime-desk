@@ -357,7 +357,7 @@ export function KubernetesPage({ profile, profileRunning, refreshNonce }: {
           </div>
           <div className="strip-item">
             <span className="strip-label">Pods</span>
-            <span className="strip-value">{counts ? `${counts.pods_running}/${counts.pods}` : "—"}</span>
+            <span className={`strip-value ${counts && counts.pods > 0 && counts.pods_running < counts.pods ? "state-warn" : ""}`}>{counts ? `${counts.pods_running}/${counts.pods}` : "—"}</span>
             <span className="strip-sub">running</span>
           </div>
           <div className="strip-item">

@@ -533,16 +533,18 @@ pub fn network_remove(name: &str) -> Result<String, String> {
     run_podman_action(&["network", "rm", name])
 }
 
+// A container that starts or stops changes every volume's user count, and that count gates
+// Remove, so these drop the cached tables just like a removal does.
 pub fn container_start(id: &str) -> Result<String, String> {
-    run_podman_action(&["start", id])
+    freed(run_podman_action(&["start", id]))
 }
 
 pub fn container_stop(id: &str) -> Result<String, String> {
-    run_podman_action(&["stop", id])
+    freed(run_podman_action(&["stop", id]))
 }
 
 pub fn container_restart(id: &str) -> Result<String, String> {
-    run_podman_action(&["restart", id])
+    freed(run_podman_action(&["restart", id]))
 }
 
 pub fn container_remove(id: &str) -> Result<String, String> {

@@ -334,6 +334,8 @@ export type PodmanVolume = {
   created_at: string;
   size: number;
   links: number;
+  /** False when the size/user table could not be read: `links` is then unknown, not zero. */
+  links_known: boolean;
 };
 
 export type PodmanNetwork = {

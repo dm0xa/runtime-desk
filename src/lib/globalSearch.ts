@@ -83,8 +83,28 @@ export function buildGlobalIndex({ profiles, containers, images, volumes, networ
   for (const n of podman.networks) {
     items.push({ id: `podman-network:${n.name}`, kind: "Podman network", label: n.name, sub: [n.driver, tagText("network", n.name)].filter(Boolean).join(" · "), action: { type: "subject", subject: { kind: "network", id: n.name, runtime: "podman" } } });
   }
+  // A tag on an object without a Sherlock page must not be routed as a subject: the
+  // Investigator would look up a container named after a machine and render an empty page.
+  const podmanSubjects = new Set<string>([
+    ...podman.containers.map((c) => `container:${c.id}`),
+    ...podman.images.map((i) => `image:${i.id}`),
+    ...podman.volumes.map((v) => `volume:${v.name}`),
+    ...podman.networks.map((n) => `network:${n.name}`),
+  ]);
   for (const { kind, id, tag } of allTags()) {
-    items.push({ id: `tag:${kind}:${id}:${tag}`, kind: "Tag", label: tag, sub: `${kind} ${id}`, action: { type: "subject", subject: { kind: kind as Subject["kind"], id } } });
+    const action: SearchAction = kind === "machine"
+      ? { type: "tab", tab: "podman-machines" }
+      : kind === "profile"
+        ? { type: "profile", name: id }
+        : {
+          type: "subject",
+          subject: {
+            kind,
+            id,
+            ...(podmanSubjects.has(`${kind}:${id}`) ? { runtime: "podman" as const } : {}),
+          },
+        };
+    items.push({ id: `tag:${kind}:${id}:${tag}`, kind: "Tag", label: tag, sub: `${kind} ${id}`, action });
   }
   return items.map((item) => ({ ...item, hay: `${item.label} ${item.sub}`.toLowerCase() }));
 }
