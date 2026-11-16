@@ -115,6 +115,8 @@ Other dialogs (New profile, Prune, Resources, Pull image, Delete): click the tri
 
 - `strict` is on, `any` is unused; prefer a typed per-table accessor over a cast.
 - Backend payloads use snake_case; keep `src/types.ts` aligned with the Rust structs.
+- `refresh()` is single-flight per profile: a second caller joins the wave in flight, a call for another profile starts its own and fences the older one (`refreshGen`). Every write inside `runRefresh` checks that fence, so a slow wave can never paint one profile's lists under another's name. Never call the list commands directly to "just update one page" — add a nonce or call `refresh`.
+- Effects that read the CLI check `document.hidden` and listen to `visibilitychange`; a backgrounded window must not keep spawning children.
 - Tables use `<div className="actions">` inside a cell; `actions` on a `<td>` replaces its table-cell layout.
 - The theme is CSS variables in `src/App.css`, light and dark under `prefers-color-scheme`.
 - Fonts are Inter and JetBrains Mono, self-hosted in `public/fonts/` as `inter-var.woff2` and

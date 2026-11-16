@@ -341,6 +341,8 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
   /** Bumped per refresh; a late answer from an older one is dropped. */
   const refreshGen = useRef(0);
+  /** The wave currently reading a profile, so a second caller joins it instead of spawning one. */
+  const refreshJob = useRef<{ profile: string; gen: number; p: Promise<void> } | null>(null);
   const [lastUpdated, setLastUpdated] = useState(0);
   /** True only after a read that the daemon answered. Counts are a claim, so every surface
    *  that prints them asks this instead of the current tab's gate. */
@@ -899,11 +901,13 @@ function App() {
     const runtime = list.find((p) => p.name === name)?.runtime ?? null;
     return safe(invoke<string>("set_profile_cmd", { profile: name, runtime }), "");
   }
-  /** The container lists this profile's daemon answers, read as one wave. */
-  async function readDocker() {
+  /** The container lists this profile's daemon answers, read as one wave.
+   *  `quiet` keeps a speculative read from raising notices: the caller started it on the
+   *  last known state, so a refusal is already explained by the profile being stopped. */
+  async function readDocker(quiet = false) {
     const call = <T,>(cmd: string) =>
       invoke<T>(cmd).then((v) => ({ ok: true as const, v })).catch((e: unknown) => {
-        reportProblem(e);
+        if (!quiet) reportProblem(e);
         return { ok: false as const, v: [] as unknown as T };
       });
     const [c, i, vol, net, cmp] = await Promise.all([
@@ -914,7 +918,9 @@ function App() {
       call<ComposeProject[]>("compose_list_cmd"),
     ]);
     return { c: c.v, i: i.v, vol: vol.v, net: net.v, cmp: cmp.v,
-      failed: !c.ok || !i.ok || !vol.ok || !net.ok || !cmp.ok };
+      // Compose is an optional plugin: its absence empties one list and must never make the
+      // Containers, Images or Volumes pages report "list unavailable".
+      failed: !c.ok || !i.ok || !vol.ok || !net.ok };
   }
   /** `docker system df` scans every layer and takes longer than the whole list wave, so it
    *  lands after the containers are on screen. A refresh replaced by a newer one (or by a
@@ -926,8 +932,11 @@ function App() {
   /** Podman is independent of the selected Colima profile. A stopped machine answers
    *  nothing, so the lists stay empty instead of raising four error notices. */
   /** `preferred` lets a caller switch machine and read in one go: state is not updated yet, so
-   *  a closure read here would still hold the previous name and undo the switch. */
-  async function readPodman(preferred?: string) {
+   *  a closure read here would still hold the previous name and undo the switch. `deep` reads
+   *  the four lists and the disk walk; the fifteen-second wave passes false unless a Podman
+   *  page is open, because those five children have no consumer while a Docker tab is. The
+   *  machine list is always read: the sidebar and the dashboard badge come from it. */
+  async function readPodman(preferred?: string, deep = true) {
     const quiet = <T,>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
     const machines = await quiet(invoke<PodmanMachine[]>("podman_machines_cmd"), []);
     // Scope before reading anything else, and keep the selection valid: a machine can be
@@ -945,6 +954,7 @@ function App() {
       setPodmanDisk(EMPTY_PODMAN_DISK);
       return;
     }
+    if (!deep) return;
     const [c, i, v, n, df] = await Promise.all([
       quiet(invoke<PodmanContainer[]>("podman_containers_cmd"), []),
       quiet(invoke<PodmanImage[]>("podman_images_cmd"), []),
@@ -959,23 +969,54 @@ function App() {
    * One data refresh. `preloaded` is a profile list the caller has just read: a launch then
    * pays for `colima list` once, and — because the profile's state is already known — the
    * container commands run in the same wave as the tool probes instead of behind them.
+   *
+   * Callers are not all deliberate: the timer, a `docker events` burst, a visibility change
+   * and the header button can all ask at once, and each wave is about seventeen children.
+   * A second request for the profile already being read joins that wave instead of starting
+   * another; a request for a *different* profile starts its own and fences the older one, so
+   * the previous daemon's rows can never land on top of the new profile's.
    */
-  async function refresh(profile: string = selected, preloaded?: Profile[]) {
+  async function refresh(profile: string = selected, preloaded?: Profile[]): Promise<void> {
+    const running = refreshJob.current;
+    if (running && running.profile === profile) return running.p;
     const gen = ++refreshGen.current;
+    const job = { profile, gen, p: runRefresh(profile, gen, preloaded) };
+    refreshJob.current = job;
+    try {
+      await job.p;
+    } finally {
+      if (refreshJob.current === job) refreshJob.current = null;
+    }
+  }
+
+  async function runRefresh(profile: string, gen: number, preloaded?: Profile[]) {
+    // Every write below is conditional on this still being the newest wave.
+    const live = () => gen === refreshGen.current;
     setRefreshing(true);
-    const knownUp = preloaded?.find((p) => p.name === profile)?.status.toLowerCase() === "running";
-    const docker = knownUp ? readDocker() : null;
+    // `colima list` costs ~480 ms and used to gate the whole docker wave. The profile's last
+    // known state is enough to start the lists beside it; a speculative read stays quiet and
+    // its answer is dropped below if the fresh list says the profile is stopped.
+    const knownStatus = preloaded?.find((p) => p.name === profile)?.status
+      ?? profiles.find((p) => p.name === profile)?.status;
+    const speculative = !preloaded;
+    const docker = knownStatus?.toLowerCase() === "running" ? readDocker(speculative) : null;
     const [p, srv, lima, sys] = await Promise.all([
       preloaded ? Promise.resolve(preloaded) : safe(invoke<Profile[]>("list_profiles_cmd"), []),
       safe(invoke<[string, number][]>("model_serve_status_cmd"), []),
       safe(invoke<LimaVm[]>("lima_vms_cmd"), []),
       safe(invoke<SystemStatus>("system_status_cmd"), null as unknown as SystemStatus),
     ]);
+    if (!live()) return;
     setProfiles(p); setProfilesRead(true); setServeList(srv); setLimaVms(lima); setTools(sys);
     if (sys) {
       try { localStorage.setItem("runtimeDesk.tools", JSON.stringify(sys)); } catch { /* quota */ }
     }
-    if (sys?.podman) void readPodman();
+    if (sys?.podman) {
+      // A Podman page needs its lists; the dashboard's Storage card needs the disk walk. Any
+      // other tab only needs the machine list behind the sidebar badge.
+      const deep = tab.startsWith("podman-") || (tab === "dashboard" && !!widgets.storage);
+      void readPodman(undefined, deep);
+    }
     else {
       setPodmanMachines([]); setPodmanContainers([]); setPodmanImages([]); setPodmanVolumes([]); setPodmanNetworks([]);
       setPodmanDisk(EMPTY_PODMAN_DISK);
@@ -990,6 +1031,7 @@ function App() {
     const profileUp = docker !== null || p.find((x) => x.name === profile)?.status.toLowerCase() === "running";
     if (profileUp) {
       const { c, i, vol, net, cmp, failed } = docker ? await docker : await readDocker();
+      if (!live()) return;
       setContainers(c); setImages(i); setVolumes(vol); setNetworks(net); setCompose(cmp);
       // Counts come from the lists already in hand; a second set of docker list
       // calls for the same numbers was the most expensive part of a refresh.
@@ -1455,6 +1497,24 @@ function App() {
   const filteredImages = applySort("images", images.filter((i) =>
     (i.repository + i.tag).toLowerCase().includes(search.toLowerCase())
     && (imageFilter === "all" || !imageUsed(i))), imageVal);
+  // Volume → containers, built once per containers change. Three call sites consulted it per
+  // render (the Unused filter, the chip count, every row) and each call re-split every
+  // container's mount string; with 300 volumes × 200 containers that was 3.5–4.5 ms of
+  // synchronous render per keystroke, plus the same again on every volume-row hover.
+  const mountsByVolume = useMemo(() => {
+    const map = new Map<string, Container[]>();
+    for (const c of containers) {
+      for (const m of c.mounts.split(",")) {
+        const name = m.trim().split(":")[0];
+        if (!name) continue;
+        const list = map.get(name);
+        if (list) list.push(c);
+        else map.set(name, [c]);
+      }
+    }
+    return map;
+  }, [containers]);
+  const containersUsingVolume = (v: Volume) => mountsByVolume.get(v.name) ?? [];
   const filteredVolumes = applySort("volumes", volumes.filter((v) =>
     v.name.toLowerCase().includes(search.toLowerCase())
     && (volumeFilter === "all" || containersUsingVolume(v).length === 0)), volumeVal);
@@ -1462,12 +1522,13 @@ function App() {
     const ref = `${i.repository}:${i.tag}`;
     return containers.filter((c) => c.image === ref || c.image === i.id || (i.id.length > 6 && c.image.startsWith(i.id)));
   };
-  const containersUsingVolume = (v: Volume) => containers.filter((c) =>
-    c.mounts.split(",").some((m) => {
-      const name = m.trim().split(":")[0];
-      return name === v.name;
-    }),
-  );
+  /**
+   * What an empty table body means. "No containers" is a claim about the engine, so it may
+   * only appear when a read answered, nothing failed, and no filter is on: a failed read, a
+   * read still in flight, and a typed filter that matched nothing each say their own thing.
+   */
+  const emptyRow = (noun: string, scoped?: string) =>
+    listsFailed ? "List unavailable" : !countsRead ? "Reading…" : scoped ? scoped : search ? "No matches." : `No ${noun}`;
   const netSource = netMap.length > 0 ? netMap.map((m) => ({ name: m.name, driver: m.driver, scope: m.scope })) : networks;
   const networkVal = (n: { name: string; driver: string; scope: string }, k: string): string | number => {
     if (k === "name") return n.name;
@@ -1852,7 +1913,7 @@ function App() {
           <div className="side-profiles">
             <div className="side-section-title">Profiles</div>
             <div className="side-profile-list">
-              {profiles.length === 0 && <div className="side-empty">No profiles yet</div>}
+              {profiles.length === 0 && <div className="side-empty">{profilesRead ? "No profiles yet" : "Reading profiles…"}</div>}
               {profiles.map((p) => {
                 const running = p.status.toLowerCase() === "running";
                 return (
@@ -1997,7 +2058,12 @@ function App() {
               refreshNonce={subjectNonce}
               onPick={openSubject}
               onNavigate={navigateSubject}
-              onOpenContainers={(search) => go({ tab: subject?.runtime === "podman" ? "podman-containers" : "containers", trail: [], search: search ?? "" })}
+              onOpenContainers={(search) => {
+                // Land on a table that can show the row: an armed Compose/Kubernetes chip or a
+                // network scope from the previous visit would filter it away.
+                setContainerFilter("all");
+                go({ tab: subject?.runtime === "podman" ? "podman-containers" : "containers", trail: [], search: search ?? "", networkScope: null });
+              }}
               onOpenNetwork={(network, names) => subject?.runtime === "podman" ? go({ tab: "podman-networks", trail: [], search: network }) : go({ tab: "containers", trail: [], search: "", networkScope: { network, names } })}
               onOpenLogs={(c) => setLogTarget({ id: c.id, name: c.name, runtime: subject?.runtime })}
               onSetMemoryLimit={setLimitTarget}
@@ -2187,7 +2253,7 @@ function App() {
                   </colgroup>
                   <thead><tr><SortTh table="containers" k="state">State</SortTh>{showOrigin && <th>Origin</th>}<SortTh table="containers" k="name">Name</SortTh><SortTh table="containers" k="image">Image</SortTh><SortTh table="containers" k="status">Status</SortTh><SortTh table="containers" k="ports">Ports</SortTh><th>Actions</th></tr></thead>
                   <tbody>
-                    {filteredContainers.length === 0 && <tr><td colSpan={containerCols} className="empty">{listsFailed ? "List unavailable" : networkScope ? "No containers on this network" : "No containers"}</td></tr>}
+                    {filteredContainers.length === 0 && <tr><td colSpan={containerCols} className="empty">{emptyRow("containers", networkScope ? "No containers on this network" : undefined)}</td></tr>}
                     {containerGroups.projects.map(({ project, rows }) => {
                       const collapsed = !!collapsedGroups[project];
                       const running = rows.filter((c) => c.state === "running").length;
@@ -2259,7 +2325,7 @@ function App() {
                   </colgroup>
                   <thead><tr><SortTh table="images" k="id">ID</SortTh><SortTh table="images" k="repository">Repository</SortTh><SortTh table="images" k="tag">Tag</SortTh><SortTh table="images" k="size">Size</SortTh><SortTh table="images" k="created">Created</SortTh><th>Used by</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {filteredImages.length === 0 && <tr><td colSpan={7} className="empty">{listsFailed ? "List unavailable" : "No images"}</td></tr>}
+                    {filteredImages.length === 0 && <tr><td colSpan={7} className="empty">{emptyRow("images")}</td></tr>}
                     {filteredImages.map((i) => {
                       const used = containersUsingImage(i);
                       return (
@@ -2329,7 +2395,7 @@ function App() {
                   </colgroup>
                   <thead><tr><SortTh table="volumes" k="name">Name</SortTh><SortTh table="volumes" k="size">Size</SortTh><SortTh table="volumes" k="driver">Driver</SortTh><SortTh table="volumes" k="mountpoint">Mountpoint</SortTh><th>Used by</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {filteredVolumes.length === 0 && <tr><td colSpan={6} className="empty">{listsFailed ? "List unavailable" : "No volumes"}</td></tr>}
+                    {filteredVolumes.length === 0 && <tr><td colSpan={6} className="empty">{emptyRow("volumes")}</td></tr>}
                     {filteredVolumes.map((v) => {
                       const used = containersUsingVolume(v);
                       const size = volSizeByName.get(v.name);
@@ -2394,7 +2460,7 @@ function App() {
                   </colgroup>
                   <thead><tr><SortTh table="networks" k="name">Name</SortTh><SortTh table="networks" k="containers">Containers</SortTh><SortTh table="networks" k="driver">Driver</SortTh><SortTh table="networks" k="subnet">Subnet</SortTh><th>Actions</th></tr></thead>
                   <tbody>
-                    {netRows.length === 0 && <tr><td colSpan={5} className="empty">{listsFailed ? "List unavailable" : "No networks"}</td></tr>}
+                    {netRows.length === 0 && <tr><td colSpan={5} className="empty">{emptyRow("networks")}</td></tr>}
                     {netRows.map((group) => (
                       <Fragment key={group.title}>
                         <tr className="group-row"><td colSpan={5}>{group.title}</td></tr>
