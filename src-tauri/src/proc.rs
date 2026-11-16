@@ -13,6 +13,7 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -69,11 +70,25 @@ impl ProcError {
     }
 }
 
+/// One drained pipe. A reader thread appends under the lock; the caller only ever takes a
+/// snapshot, so an inherited descriptor cannot make it wait.
+#[derive(Default)]
+struct Pipe {
+    bytes: Vec<u8>,
+    closed: bool,
+}
+
 /// Runs the command to completion or to `limit`, whichever comes first.
 ///
 /// Both pipes are drained on their own threads: a child that fills a 64 KiB pipe buffer
 /// blocks on write, and a parent that waits for exit before reading would deadlock on the
 /// exact large outputs (a 300-row `docker ps`, an inspect dump) this app asks for.
+///
+/// The readers are never joined. A client that leaves a grandchild behind (`sh -c '… &'`,
+/// a colima wrapper) keeps the pipe open after the child dies, and joining would put the
+/// deadline back in the hands of whatever outlived it. Instead the caller waits a short
+/// grace for EOF and then reports what arrived; a stranded reader exits on its own when the
+/// descriptor finally closes.
 pub fn run(cmd: &mut Command, limit: Option<Duration>) -> Result<Captured, ProcError> {
     let label = program_label(cmd);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -84,24 +99,23 @@ pub fn run(cmd: &mut Command, limit: Option<Duration>) -> Result<Captured, ProcE
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
+            Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(source) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = collected(stdout);
-                let _ = collected(stderr);
+                let _ = settle(&stderr, GRACE);
+                let _ = settle(&stdout, GRACE);
                 return Err(ProcError::Wait { label, source });
             }
         }
         if let Some(limit) = limit {
             if started.elapsed() >= limit {
-                // Kill, then reap: the readers only see EOF once the child is gone.
                 let _ = child.kill();
                 let _ = child.wait();
-                let err = collected(stderr).unwrap_or_default();
-                let _ = collected(stdout);
-                let detail = first_line(&String::from_utf8_lossy(&err));
+                let stderr = settle(&stderr, GRACE);
+                let _ = settle(&stdout, GRACE);
+                let detail = first_line(&stderr);
                 return Err(ProcError::Timeout { label, limit, detail });
             }
         }
@@ -109,27 +123,55 @@ pub fn run(cmd: &mut Command, limit: Option<Duration>) -> Result<Captured, ProcE
         thread::sleep(Duration::from_millis(if started.elapsed() < Duration::from_millis(200) { 2 } else { 25 }));
     };
 
-    let out = collected(stdout).unwrap_or_default();
-    let err = collected(stderr).unwrap_or_default();
     Ok(Captured {
-        success: status.map(|s| s.success()).unwrap_or(false),
-        stdout: String::from_utf8_lossy(&out).into_owned(),
-        stderr: String::from_utf8_lossy(&err).into_owned(),
+        success: status.success(),
+        stdout: settle(&stdout, GRACE),
+        stderr: settle(&stderr, GRACE),
     })
 }
 
-fn drain<R: Read + Send + 'static>(mut pipe: R) -> thread::JoinHandle<Vec<u8>> {
+/// How long a finished child's pipes get to reach EOF before the caller stops waiting for
+/// the tail of the output. Anything slower is a descriptor held open by something the child
+/// started, and its bytes are not part of this answer.
+const GRACE: Duration = Duration::from_millis(250);
+
+fn drain<R: Read + Send + 'static>(mut pipe: R) -> Arc<Mutex<Pipe>> {
+    let slot: Arc<Mutex<Pipe>> = Arc::new(Mutex::new(Pipe::default()));
+    let writer = Arc::clone(&slot);
     thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let Ok(mut held) = writer.lock() else { return };
+                    held.bytes.extend_from_slice(&chunk[..n]);
+                }
+                Err(_) => break,
+            }
+        }
+        if let Ok(mut held) = writer.lock() {
+            held.closed = true;
+        }
+    });
+    slot
 }
 
-/// A panicked reader thread loses its bytes but must not propagate: the deadline already
-/// decided the outcome.
-fn collected(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Option<Vec<u8>> {
-    handle.and_then(|h| h.join().ok())
+/// Waits at most `grace` for the reader to finish, then returns the text that arrived.
+fn settle(slot: &Option<Arc<Mutex<Pipe>>>, grace: Duration) -> String {
+    let Some(slot) = slot else {
+        return String::new();
+    };
+    let until = Instant::now() + grace;
+    loop {
+        {
+            let Ok(held) = slot.lock() else { return String::new() };
+            if held.closed || Instant::now() >= until {
+                return String::from_utf8_lossy(&held.bytes).into_owned();
+            }
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 
 fn program_label(cmd: &Command) -> String {
