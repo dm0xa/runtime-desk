@@ -101,9 +101,11 @@ jobs:
           # Checksums ship with the release: an immutable release can never gain them
           # later, and the Homebrew cask needs one per architecture to pin a sha256.
           # GitHub rewrites spaces in asset names to dots, so the checksum lines name
-          # the asset as it will be downloadable, not as it sits on disk.
+          # the asset as it will be downloadable, not as it sits on disk. sha256sum is
+          # the Ubuntu spelling; shasum is the macOS one.
           (cd dmg && for f in *.dmg; do
-            printf '%s  %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$(printf '%s' "$f" | tr ' ' '.')"
+            sum=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$f"; else shasum -a 256 "$f"; fi | cut -d' ' -f1)
+            printf '%s  %s\n' "$sum" "$(printf '%s' "$f" | tr ' ' '.')"
           done > SHA256SUMS.txt && cat SHA256SUMS.txt)
           gh release create "$tag" \
             --verify-tag \
