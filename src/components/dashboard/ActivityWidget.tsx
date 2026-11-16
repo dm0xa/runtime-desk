@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_SAMPLES, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../../lib/activity";
+import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../../lib/activity";
 import { fmtBytes } from "../../lib/format";
 import { Sparkline } from "../Sparkline";
 
@@ -41,7 +41,7 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
       }}
     >
       <div className="activity-head">
-        <div className="strip-title">Activity {active && <span className="activity-live">live · 2s</span>}</div>
+        <div className="strip-title">Activity {active && <span className="activity-live">live · 1s</span>}</div>
       </div>
 
       {!visible && <div className="activity-empty">Card is hidden — enable it in the dashboard editor to poll <code>docker stats</code>.</div>}
@@ -55,7 +55,7 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
           <div className="activity-total">
             <span className="strip-label">Total CPU · last 72 s</span>
             {totalHistory.length < ACTIVITY_SAMPLES && (
-              <span className="activity-recorded">{totalHistory.length * 2} s of 72 s recorded</span>
+              <span className="activity-recorded">{Math.round(totalHistory.length * ACTIVITY_STEP_MS / 1000)} s of {ACTIVITY_WINDOW_S} s recorded</span>
             )}
             <span className="activity-total-value">{totalCpu.toFixed(1)}%</span>
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_SAMPLES, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
+import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
 import { fmtBytes, fmtSize } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { memoryPressure } from "../lib/memoryGuard";
@@ -48,7 +48,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }:
         <div className="section-head">
           <div>
             <h3>Live containers</h3>
-            <p className="muted">Sampled from <code>docker stats</code> every 2 s while the app is frontmost.</p>
+            <p className="muted">Streamed from <code>docker stats</code> at about 1 Hz while the app is frontmost.</p>
           </div>
         </div>
 
@@ -76,7 +76,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }:
                 <span className="activity-chart-value">{loading ? "—" : `${totalCpu.toFixed(1)}%`}</span>
                 <span className="muted activity-chart-peak">
                   {cpuHistory.length > 1
-                    ? `peak ${windowPeak.toFixed(1)}% · ${cpuHistory.length >= ACTIVITY_SAMPLES ? "72 s window" : `${cpuHistory.length * 2} s of 72 s recorded`}`
+                    ? `peak ${windowPeak.toFixed(1)}% · ${cpuHistory.length >= ACTIVITY_SAMPLES ? `${ACTIVITY_WINDOW_S} s window` : `${Math.round(cpuHistory.length * ACTIVITY_STEP_MS / 1000)} s of ${ACTIVITY_WINDOW_S} s recorded`}`
                     : "collecting samples…"}
                 </span>
               </div>
@@ -105,7 +105,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }:
                   <span className="trend-value">{fmtBytes(totalMem)}</span>
                 </div>
                 <Sparkline values={totals.mem} slots={ACTIVITY_SAMPLES} fit ceiling={Math.max(memPeak * 1.2, 1)} label="Total memory across containers" />
-                <span className="inv-metric-sub">peak {fmtBytes(memPeak)} · {totals.mem.length >= ACTIVITY_SAMPLES ? "72 s window" : `${totals.mem.length * 2} s of 72 s recorded`}</span>
+                <span className="inv-metric-sub">peak {fmtBytes(memPeak)} · {totals.mem.length >= ACTIVITY_SAMPLES ? `${ACTIVITY_WINDOW_S} s window` : `${Math.round(totals.mem.length * ACTIVITY_STEP_MS / 1000)} s of ${ACTIVITY_WINDOW_S} s recorded`}</span>
               </div>
               <div className="trend-card">
                 <div className="trend-head">

@@ -80,6 +80,20 @@ fn kill_stats_stream(state: &StatsStream) {
     }
 }
 
+/// The live `docker stats` child behind the Activity view: every container of the selected
+/// profile from one stream, so the two-second poll does not spawn a child each time.
+struct ActivityStream(Mutex<Option<std::process::Child>>);
+
+fn kill_activity_stream(state: &ActivityStream) {
+    // The slot is released before the child is signalled: a client stuck in a read must not
+    // hold the next stream behind this one.
+    let child = state.0.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 type R<T> = Result<T, String>;
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) -> R<T> {
@@ -393,11 +407,14 @@ async fn system_status_cmd() -> tools::SystemStatus {
 /// before the first container list. `runtime` comes from the profile list the caller has
 /// already read. A status run behind the caller only confirms the socket.
 #[tauri::command]
-fn set_profile_cmd(profile: String, runtime: Option<String>) -> String {
+fn set_profile_cmd(profile: String, runtime: Option<String>, activity: tauri::State<'_, ActivityStream>) -> String {
     let endpoint = colima::docker_endpoint(&profile, None);
     docker::set_endpoint(Some(endpoint.clone()));
     // Colima's own nerdctl path is the primary client for containerd profiles.
     docker::set_client(runtime.as_deref().unwrap_or("docker"), &profile);
+    // A stats child left on the previous daemon would keep feeding the Activity view numbers
+    // about a profile the window no longer shows; the window restarts it on the next tick.
+    kill_activity_stream(&activity);
     endpoint
 }
 
@@ -536,6 +553,34 @@ fn stats_stop_cmd(state: tauri::State<'_, StatsStream>) -> R<String> {
     Ok("stopped".into())
 }
 
+/// The Activity view's stream: every container, one line each per second, from one child.
+#[tauri::command]
+fn stats_all_start_cmd(on_sample: Channel<String>, state: tauri::State<'_, ActivityStream>) -> R<String> {
+    let mut cmd = docker::stats_all_command();
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = cmd.spawn().map_err(|e| format!("failed to start docker stats: {e}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        return Err("docker stats produced no stdout".into());
+    };
+    kill_activity_stream(&state);
+    if let Ok(mut slot) = state.0.lock() { *slot = Some(child); }
+    std::thread::spawn(move || {
+        docker::read_stats_lines_all(BufReader::new(stdout), |stat| {
+            let Ok(json) = serde_json::to_string(&stat) else { return true };
+            on_sample.send(json).is_ok()
+        });
+        let _ = on_sample.send(STATS_END.to_string());
+    });
+    Ok("streaming".into())
+}
+
+#[tauri::command]
+fn stats_all_stop_cmd(state: tauri::State<'_, ActivityStream>) -> R<String> {
+    kill_activity_stream(&state);
+    Ok("stopped".into())
+}
+
 #[tauri::command]
 fn open_url_cmd(url: String) -> R<String> {
     if !is_openable_url(&url) {
@@ -654,6 +699,7 @@ pub fn run() {
         .manage(ServeState(Mutex::new(load_serve_state())))
         .manage(EventStream(Mutex::new(None)))
         .manage(StatsStream(Mutex::new(None)))
+        .manage(ActivityStream(Mutex::new(None)))
         .plugin(tauri_plugin_opener::init())
         // Size, position and maximized state survive a relaunch, the way every Mac
         // window does; the work-area fit below still pulls an off-screen frame back.
@@ -702,6 +748,7 @@ pub fn run() {
             system_status_cmd, set_profile_cmd, compose_list_cmd, lima_vms_cmd,
             version_check_cmd, app_release_cmd, upgrade_cmd, vm_diagnostics_cmd,
             events_start_cmd, events_stop_cmd, stats_start_cmd, stats_stop_cmd,
+            stats_all_start_cmd, stats_all_stop_cmd,
             k8s_cluster_cmd, k8s_resources_cmd, k8s_logs_cmd, k8s_cluster_action_cmd
         ])
         .build(tauri::generate_context!())
@@ -711,6 +758,7 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 kill_event_stream(app.state::<EventStream>().inner());
                 kill_stats_stream(app.state::<StatsStream>().inner());
+                kill_activity_stream(app.state::<ActivityStream>().inner());
             }
         });
 }

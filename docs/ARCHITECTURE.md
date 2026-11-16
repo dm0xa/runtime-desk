@@ -252,7 +252,7 @@ dropped connection or be parsed by the Docker decoder.
 
 ### Live activity
 
-`src/lib/activity.ts` is a module-level store with one polling lifecycle: `container_stats_cmd` on a 2-second minimum gap measured from the end of the previous run (a fixed interval kept a `docker stats` child alive permanently once a profile had a dozen containers); responses appended to per-container series capped at 36 samples (72 seconds) plus totals; an `inFlight` flag skipping a tick; subscribers notified per sample; vanished series dropped, a failed sample clearing history and recording the error.
+`src/lib/activity.ts` is a module-level store with one sampling lifecycle: one `docker stats` child streams every container (`stats_all_start_cmd`), samples land in a `latest` map, and accounting runs once a second into per-container series capped at 72 points (72 seconds) plus totals; a container absent for two ticks is dropped with its series (the CLI stops reporting a container about a second after it exits), and an empty id is ignored because the CLI prints a transient creation row. `container_stats_cmd` on a two-second minimum gap is the fallback when the stream is refused or ends. Subscribers are notified once per accounting tick; a failed sample clears history and records the error.
 
 The App activates the store when:
 

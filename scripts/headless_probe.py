@@ -219,6 +219,26 @@ window.__TAURI_INTERNALS__ = {
           mem_pct: 25, pids: 3, net_rx: 10, net_tx: 20, block_read: 5, block_write: 6 };
       case "container_stats_cmd": return [{ id: "c0", name: "web-0", cpu: 1.5, mem: 1024, mem_limit: 4096,
           mem_pct: 25, pids: 3, net_rx: 10, net_tx: 20, block_read: 5, block_write: 6 }];
+      // The live path: one child streaming every container at about 1 Hz. The stub pushes a
+      // sample a second so the probe renders the real Activity view, not its poll fallback.
+      case "stats_all_start_cmd": {
+        const ch = args && args.onSample;
+        if (!ch || !ch.onmessage) return "polling";
+        if (window.__activity) clearInterval(window.__activity);
+        let tick = 0;
+        const emit = () => {
+          tick += 1;
+          ch.onmessage(JSON.stringify({ id: "c0", name: "web-0", cpu: 1 + (tick %% 5),
+            mem: 1048576 * (24 + (tick %% 7)), mem_limit: 4294967296, mem_pct: 12, pids: 3,
+            net_rx: 1000 * tick, net_tx: 500 * tick, block_read: 4096, block_write: 2048 }));
+        };
+        emit();
+        window.__activity = setInterval(emit, 1000);
+        return "streaming";
+      }
+      case "stats_all_stop_cmd":
+        if (window.__activity) { clearInterval(window.__activity); window.__activity = null; }
+        return "stopped";
       case "image_detail_cmd": return { id: "sha256:aaaa", repository: "nginx", tag: "1", size: "100MB",
           created: "2 days ago", architecture: "arm64", os: "linux", digest: "sha256:bbbb", layers: [],
           entrypoint: "", command: "", exposed_ports: [], env: [], labels: {}, containers: [] };

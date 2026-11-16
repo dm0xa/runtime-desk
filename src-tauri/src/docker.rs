@@ -111,6 +111,22 @@ fn stats_argv(id: &str) -> Vec<&str> {
     vec!["stats", "--format", "{{json .}}", id]
 }
 
+/// A streaming stats child for every container of the active profile: the Activity view
+/// reads all of them at once, and one long-lived child replaces a `--no-stream` spawn every
+/// two seconds (measured: 1.06 s of child per call, thirty spawns a minute).
+pub fn stats_all_command() -> Command {
+    let client = CLIENT.read().map(|c| c.clone()).unwrap_or(Client::Docker);
+    let args = vec!["stats", "--format", "{{json .}}"];
+    match client {
+        Client::Docker => docker_command(&args),
+        Client::ColimaNerdctl(profile) => {
+            let mut cmd = Command::new("colima");
+            cmd.args(nerdctl_argv(&profile, &args));
+            cmd
+        }
+    }
+}
+
 /// A long-running stats child for the active profile. Both clients stream: Colima's
 /// nerdctl wrapper mirrors docker's `stats --format` fields and one-second interval.
 pub fn stats_command(id: &str) -> Command {
@@ -232,6 +248,26 @@ mod client_tests {
         let args = super::stats_argv("abc123");
         assert!(!args.contains(&"--no-stream"), "the panel needs a stream, not one shot");
         assert_eq!(args.last(), Some(&"abc123"));
+    }
+
+    #[test]
+    fn stats_all_keeps_each_container_of_a_shared_second() {
+        // Two containers interleave on one stream; the redraw throttle must be per
+        // container, or the second one would be dropped entirely.
+        let line = |id: &str| {
+            format!(
+                "{{\"BlockIO\":\"0B / 0B\",\"CPUPerc\":\"1.5%\",\"Container\":\"{id}\",\"ID\":\"{id}\",\
+                 \"MemPerc\":\"9.9%\",\"MemUsage\":\"10MiB / 2GiB\",\"Name\":\"{id}\",\
+                 \"NetIO\":\"1KiB / 2KiB\",\"PIDs\":\"3\"}}\n"
+            )
+        };
+        let stream = format!("{}{}{}{}", line("aaa"), line("aaa"), line("bbb"), line("bbb"));
+        let mut seen = Vec::new();
+        super::read_stats_lines_all(stream.as_bytes(), |stat| {
+            seen.push(stat.id);
+            true
+        });
+        assert_eq!(seen, vec!["aaa", "bbb"], "one sample per container per second");
     }
 
     #[test]
@@ -765,6 +801,25 @@ pub fn read_stats_lines<R: std::io::BufRead>(reader: R, mut emit: impl FnMut(Con
         let Some(stat) = parse_stat_line(&strip_ansi(&raw)) else { continue };
         if last.elapsed() < STATS_MIN_GAP { continue; }
         last = Instant::now();
+        if !emit(stat) { return false; }
+    }
+    true
+}
+
+/// The same reader for a stream that carries every container: the redraw throttle has to be
+/// per container, or a four-container stream would keep only the first line of each second.
+/// A container that stopped is forgotten after half a minute so the map stays small.
+pub fn read_stats_lines_all<R: std::io::BufRead>(reader: R, mut emit: impl FnMut(ContainerStat) -> bool) -> bool {
+    let mut last: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+    for raw in reader.lines().map_while(Result::ok) {
+        let Some(stat) = parse_stat_line(&strip_ansi(&raw)) else { continue };
+        let now = Instant::now();
+        match last.get(&stat.id) {
+            Some(at) if now.duration_since(*at) < STATS_MIN_GAP => continue,
+            _ => {}
+        }
+        last.insert(stat.id.clone(), now);
+        last.retain(|_, at| now.duration_since(*at) < Duration::from_secs(30));
         if !emit(stat) { return false; }
     }
     true

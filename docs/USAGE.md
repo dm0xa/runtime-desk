@@ -85,7 +85,7 @@ Live container metrics from `docker stats`.
 
 Header: search (global scope only — no list here), a container-box icon opening the container list (hover: **Open Containers**), Refresh.
 
-Panel title **Live containers**, sampled every 2 s while frontmost. Before the first answer: **Reading the first sample from `docker stats`…** rather than 0%; paused in the background it says so and ages the last reading.
+Panel title **Live containers**, streamed at about 1 Hz while frontmost from one `docker stats` child (a two-second `--no-stream` poll takes over if the stream is refused or ends). Before the first answer: **Reading the first sample from `docker stats`…** rather than 0%; paused in the background it says so and ages the last reading.
 
 A 72-second total-CPU chart, then a strip: CPU, memory, network received/sent, block I/O read/written, PIDs, container count — network and block I/O cumulative since each container started. Then memory and network receive **rate** (bytes per second) charts, then a CPU-sorted table with a 72-second sparkline, memory against its limit, network I/O, block I/O and PIDs per row on one `0–N%` scale.
 
