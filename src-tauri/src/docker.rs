@@ -354,8 +354,12 @@ fn parse_images(raw: &str) -> Vec<Image> {
 
 /// Base list plus rows it does not already hold, keyed by id+repository+tag.
 fn merge_images(base: &mut Vec<Image>, extra: Vec<Image>) {
+    let mut seen: std::collections::HashSet<(String, String, String)> = base
+        .iter()
+        .map(|i| (i.id.clone(), i.repository.clone(), i.tag.clone()))
+        .collect();
     for img in extra {
-        if !base.iter().any(|i| i.id == img.id && i.repository == img.repository && i.tag == img.tag) {
+        if seen.insert((img.id.clone(), img.repository.clone(), img.tag.clone())) {
             base.push(img);
         }
     }
@@ -364,15 +368,21 @@ fn merge_images(base: &mut Vec<Image>, extra: Vec<Image>) {
 /// Tagged images plus the untagged ones. Colima's nerdctl lists untagged images in its normal
 /// listing (`<none>` repository). The Docker CLI from v29 hides them unless asked by filter
 /// (`-a` would add every build layer), so a docker answer is topped up with one extra call.
+///
+/// The top-up does not depend on the first answer, so it runs beside it: two serial CLI calls
+/// were ~380 ms of every fifteen-second refresh on a 27-image profile.
 pub fn list_images() -> Result<Vec<Image>, String> {
-    let (raw, client) = run_client(&["images", "--format", IMAGE_FORMAT]);
-    let mut images = parse_images(&raw?);
-    if client == "docker" {
-        if let (Ok(raw), _) = run_client(&["images", "--filter", "dangling=true", "--format", IMAGE_FORMAT]) {
-            merge_images(&mut images, parse_images(&raw));
+    std::thread::scope(|scope| {
+        let top_up = (client_label() == "docker").then(|| {
+            scope.spawn(|| run_client(&["images", "--filter", "dangling=true", "--format", IMAGE_FORMAT]).0)
+        });
+        let (raw, _client) = run_client(&["images", "--format", IMAGE_FORMAT]);
+        let mut images = parse_images(&raw?);
+        if let Some(extra) = top_up.and_then(|handle| handle.join().ok()).and_then(|result| result.ok()) {
+            merge_images(&mut images, parse_images(&extra));
         }
-    }
-    Ok(images)
+        Ok(images)
+    })
 }
 
 #[derive(Deserialize, Serialize, Clone)]
