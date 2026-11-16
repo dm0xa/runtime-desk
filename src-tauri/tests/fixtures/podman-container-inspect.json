@@ -1,0 +1,94 @@
+{
+  "Id": "825c2a3579e0488893b4535a4c56bbe4a57594d3ab65cb8537e968f8dd9a5529",
+  "Name": "omp-fixture-probe",
+  "Created": "2026-11-13T17:35:18.373811728+01:00",
+  "Image": "abbc135a7d3909a5eb6a56aac4c769cf15be025e3c9e226b8660f2b2b378158b",
+  "ImageName": "docker.io/library/alpine:latest",
+  "RestartCount": 0,
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "StartedAt": "2026-11-13T17:35:18.554584145+01:00",
+    "FinishedAt": "0001-01-01T00:00:00Z",
+    "OOMKilled": false,
+    "Pid": 17386,
+    "Health": null
+  },
+  "Config": {
+    "Hostname": "825c2a3579e0",
+    "User": "",
+    "Env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "container=podman",
+      "DEMO=1",
+      "HOME=/root",
+      "HOSTNAME=825c2a3579e0"
+    ],
+    "Cmd": [
+      "sleep",
+      "300"
+    ],
+    "Entrypoint": [],
+    "WorkingDir": "/",
+    "Labels": null,
+    "ExposedPorts": {
+      "80/tcp": {}
+    },
+    "Healthcheck": null
+  },
+  "HostConfig": {
+    "Memory": 0,
+    "NanoCpus": 0,
+    "PidsLimit": 0,
+    "RestartPolicy": {
+      "Name": "no",
+      "MaximumRetryCount": 0
+    }
+  },
+  "Mounts": [
+    {
+      "Type": "volume",
+      "Name": "omp-fixture-vol",
+      "Source": "/var/home/core/.local/share/containers/storage/volumes/omp-fixture-vol/_data",
+      "Destination": "/data",
+      "Driver": "local",
+      "Mode": "",
+      "Options": [
+        "nosuid",
+        "nodev",
+        "rbind"
+      ],
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "NetworkSettings": {
+    "Ports": {
+      "80/tcp": [
+        {
+          "HostIp": "0.0.0.0",
+          "HostPort": "18080"
+        }
+      ]
+    },
+    "Networks": {
+      "podman": {
+        "EndpointID": "",
+        "Gateway": "10.88.0.1",
+        "IPAddress": "10.88.0.7",
+        "IPPrefixLen": 16,
+        "IPv6Gateway": "",
+        "GlobalIPv6Address": "",
+        "GlobalIPv6PrefixLen": 0,
+        "MacAddress": "8a:00:39:7b:cd:c2",
+        "NetworkID": "2f259bab93aaaaa2542ba43ef33eb990d0999ee1b9924b557b7be53c0b7a1bb9",
+        "DriverOpts": null,
+        "IPAMConfig": null,
+        "Links": null,
+        "Aliases": [
+          "825c2a3579e0"
+        ]
+      }
+    }
+  }
+}

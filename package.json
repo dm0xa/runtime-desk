@@ -1,0 +1,36 @@
+{
+  "name": "runtime-desk",
+  "private": true,
+  "version": "1.1.3",
+  "description": "macOS desktop app for local container runtimes",
+  "author": "dm0xa",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dm0xa/runtime-desk.git"
+  },
+  "homepage": "https://github.com/dm0xa/runtime-desk#readme",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && vite build",
+    "bundle": "sh scripts/bundle.sh",
+    "check:commands": "python3 scripts/check_commands.py",
+    "dev": "vite",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16",
+    "@tauri-apps/cli": "^2"
+  }
+}
