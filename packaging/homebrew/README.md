@@ -48,7 +48,7 @@ the bump immediately.
 brew tap --force dm0xa/tap /path/to/tap-checkout
 brew trust --cask dm0xa/tap/runtime-desk
 brew audit --cask dm0xa/tap/runtime-desk     # exit 0, no output
-brew style --cask dm0xa/tap                  # no offenses
+brew style Casks/runtime-desk.rb             # from the tap checkout; no offenses
 brew install --cask dm0xa/tap/runtime-desk --appdir=/tmp/casktest
 brew uninstall --cask --force runtime-desk   # uninstall takes no --appdir
 brew untap dm0xa/tap
@@ -56,3 +56,6 @@ brew untap dm0xa/tap
 
 `--appdir` keeps `/Applications` untouched. `brew audit --online` additionally
 downloads the asset to check the `sha256`; it needs the release to be public.
+Style the cask, not the tap root: `brew style --cask dm0xa/tap` also lints
+`bump.sh`, which Homebrew's bash-oriented shellcheck reads as `[[ ]]`/brace
+offenses against a deliberately POSIX script.
