@@ -85,10 +85,13 @@ const TREND_SAMPLES = 120;
 const TREND_MIN_POINTS = Math.ceil(TREND_SAMPLES / 12);
 /** Fallback cadence, in milliseconds, when the live stream cannot start or dies. */
 const POLL_MS = 5000;
-/** Seconds of history collected so far, e.g. `45 s window` or `2 min window`. */
-const windowLabel = (n: number) => (n >= TREND_SAMPLES ? "2 min window" : `${n} s window`);
+/** Seconds of history collected so far, from the samples' own timestamps. A count times an
+ *  assumed cadence was seven times off in the poll fallback, where samples land ~7 s apart. */
+const windowLabel = (n: number, spanSeconds: number) =>
+  (n >= TREND_SAMPLES ? "2 min window" : `${spanSeconds || n} s window`);
 /** Until the chart draws, count down to it instead of implying a two-minute wait. */
-const collecting = (n: number) => `collecting · chart in ${Math.max(0, TREND_MIN_POINTS - n)} s`;
+const collecting = (n: number, stepSeconds: number) =>
+  `collecting · chart in ${Math.round(Math.max(0, TREND_MIN_POINTS - n) * stepSeconds)} s`;
 const maskable = (k: string) => SECRET_KEY.test(k);
 
 /** Docker's ps port string from structured bindings, so PortChips can open the URL. */
@@ -247,6 +250,9 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   const [statsNonce, setStatsNonce] = useState(0);
   const [trend, setTrend] = useState<{ cpu: number[]; mem: number[] }>({ cpu: [], mem: [] });
   const [net, setNet] = useState<{ rx: number[]; tx: number[] }>({ rx: [], tx: [] });
+  /** First and last sample timestamps, plus whether the poll fallback is driving them: the
+   *  x-axis is real elapsed time, not a count times an assumed one-second cadence. */
+  const [trendMeta, setTrendMeta] = useState({ first: 0, last: 0, polling: false });
   const [visible, setVisible] = useState(() => document.visibilityState === "visible");
   const trendOwner = useRef<string>("");
   const prevSample = useRef<{ at: number; rx: number; tx: number } | null>(null);
@@ -256,6 +262,9 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
   const running = container?.state === "running";
+  /** Real seconds between the first and last sample, and how far apart samples land. */
+  const trendSpan = trendMeta.first && trendMeta.last ? Math.round((trendMeta.last - trendMeta.first) / 1000) : 0;
+  const trendStep = trendMeta.polling ? POLL_MS / 1000 : 1;
 
   // A hidden window must not keep a `docker stats` child alive: the sampler pauses.
   useEffect(() => {
@@ -300,11 +309,23 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       trendOwner.current = subject.id;
       setTrend({ cpu: [], mem: [] });
       setNet({ rx: [], tx: [] });
+      setTrendMeta({ first: 0, last: 0, polling: false });
       prevSample.current = null;
+      // The sample in hand belongs to the previous subject; only then is discarding it right.
+      // Clearing it on every effect entry also blanked the panel on ⌘R, on a restored window
+      // and on the panel's own restart, for a container that had not changed.
+      setStats(null);
+      setStatsError(null);
     }
-    setStats(null);
-    setStatsError(null);
-    if (!subject || subject.kind !== "container" || !running || !visible) return;
+    if (!subject || subject.kind !== "container" || !running || !visible) {
+      // A stopped container must not keep showing its last numbers; a hidden window keeps
+      // them, because the panel resumes the moment it is visible again.
+      if (!subject || subject.kind !== "container" || !running) {
+        setStats(null);
+        setStatsError(null);
+      }
+      return;
+    }
     let alive = true;
     let stop: (() => void) | null = null;
     let timer: number | undefined;
@@ -329,6 +350,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
         }));
       }
       prevSample.current = { at: now, rx: next.net_rx, tx: next.net_tx };
+      setTrendMeta((m) => ({ first: m.first || now, last: now, polling: m.polling }));
     };
 
     const poll = async () => {
@@ -349,6 +371,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
     const startPolling = () => {
       if (polling || !alive) return;
       polling = true;
+      setTrendMeta((m) => ({ ...m, polling: true }));
       void poll();
       timer = window.setInterval(() => { if (!document.hidden) void poll(); }, POLL_MS);
     };
@@ -508,7 +531,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
         <section className="panel" aria-busy={!stats && !statsError}>
           <div className="inv-panel-head">
             <h3>Performance</h3>
-            <span className="muted inv-note">live · 1 s from docker stats</span>
+            <span className="muted inv-note">{trendMeta.polling ? "polling · 5 s from docker stats" : "live · 1 s from docker stats"}</span>
             <button className="icon-plain" onClick={() => setStatsNonce((n) => n + 1)} aria-label="Restart live sample" title="Restart live sample">
               <RefreshIcon size={15} />
             </button>
@@ -525,7 +548,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                     ? <span className="spark-skeleton" aria-hidden="true" />
                     : <Sparkline values={trend.cpu} slots={TREND_SAMPLES} fit ceiling={cpuCeiling} label="CPU over the last two minutes" />}
                   <span className="inv-metric-sub">
-                    {trend.cpu.length >= TREND_MIN_POINTS ? `peak ${Math.max(...trend.cpu).toFixed(1)}% · ${windowLabel(trend.cpu.length)} · scale 100%` : collecting(trend.cpu.length)}
+                    {trend.cpu.length >= TREND_MIN_POINTS ? `peak ${Math.max(...trend.cpu).toFixed(1)}% · ${windowLabel(trend.cpu.length, trendSpan)} · scale 100%` : collecting(trend.cpu.length, trendStep)}
                   </span>
                 </div>
                 <div className="trend-card">
@@ -550,7 +573,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                     ? <span className="spark-skeleton" aria-hidden="true" />
                     : <Sparkline values={net.rx} secondary={net.tx} slots={TREND_SAMPLES} fit label="Network receive and transmit rate" />}
                   <span className="inv-metric-sub">
-                    {net.rx.length >= TREND_MIN_POINTS ? `receive solid · transmit light · ${windowLabel(net.rx.length)}` : collecting(net.rx.length)}
+                    {net.rx.length >= TREND_MIN_POINTS ? `receive solid · transmit light · ${windowLabel(net.rx.length, trendSpan)}` : collecting(net.rx.length, trendStep)}
                   </span>
                 </div>
               </div>

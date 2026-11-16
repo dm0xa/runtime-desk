@@ -46,15 +46,24 @@ export function ContainerDetail({ id, name, ports, running, onLogs, onAction, on
       }
     })();
     if (running) {
-      // Podman's stats row carries the 12-character id; the table hands us the full one.
-      invoke<ContainerStat[]>(commands.stats)
-        .then((stats) => { if (alive) setStat(stats.find((s) => s.id === id || id.startsWith(s.id) || s.name === name) ?? null); })
-        .catch(() => { /* stats are best effort */ });
+      // One row is expanded at a time, so ask for that container: `docker stats --no-stream`
+      // over the whole list measured ~1.9 s to fill one line, and the one-shot command that
+      // Sherlock already uses answers the same question for one child.
+      if (source === "docker") {
+        invoke<ContainerStat>("container_stats_one_cmd", { id })
+          .then((s) => { if (alive) setStat(s); })
+          .catch(() => { /* stats are best effort */ });
+      } else {
+        // Podman's stats row carries the 12-character id; the table hands us the full one.
+        invoke<ContainerStat[]>(commands.stats)
+          .then((stats) => { if (alive) setStat(stats.find((s) => s.id === id || id.startsWith(s.id) || s.name === name) ?? null); })
+          .catch(() => { /* stats are best effort */ });
+      }
     } else {
       setStat(null);
     }
     return () => { alive = false; };
-  }, [id, name, running, commands.detail, commands.stats]);
+  }, [id, name, running, source, commands.detail, commands.stats]);
 
   /** The raw payload is a window, like Logs: the row keeps one glyph, not a sheet. */
   function loadInspect() {
