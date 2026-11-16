@@ -1,0 +1,40 @@
+name: Bump cask
+
+# Copy this file to the tap repository as .github/workflows/bump.yml, together
+# with bump.sh (from the app repo's packaging/homebrew/). The cask is generated
+# from the newest release's SHA256SUMS.txt, so nothing here needs a version.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: render the cask from the newest release
+        env:
+          # The app repo is private, so the tap's own GITHUB_TOKEN cannot read its
+          # releases: a fine-grained PAT with Contents: read on dm0xa/runtime-desk
+          # is stored as the tap's RELEASE_TOKEN secret.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: ./bump.sh
+
+      - name: commit when the cask moved
+        run: |
+          set -eu
+          if git diff --quiet -- Casks/runtime-desk.rb; then
+            echo "cask already names the newest release"
+            exit 0
+          fi
+          version=$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/runtime-desk.rb)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/runtime-desk.rb
+          git commit -m "runtime-desk: update to ${version}"
+          git push
