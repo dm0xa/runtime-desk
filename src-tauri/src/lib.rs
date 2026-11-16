@@ -52,6 +52,10 @@ fn save_serve_state(map: &HashMap<String, u32>) {
 /// switch replaces it, because a child left behind keeps a reader on the previous daemon.
 struct EventStream(Mutex<Option<std::process::Child>>);
 
+/// Sent when the events child closes its stdout. Not JSON, so it can never be mistaken for
+/// an event, and the window can drop back to its fifteen-second refresh.
+const EVENTS_END: &str = "__events_end__";
+
 fn kill_event_stream(state: &EventStream) {
     // Take the child out inside the lock, then kill it outside: `wait()` on a client stuck
     // in an uninterruptible read would otherwise hold the slot against every other stream
@@ -506,10 +510,13 @@ fn events_start_cmd(on_event: Channel<String>, state: tauri::State<'_, EventStre
     if let Ok(mut slot) = state.0.lock() { *slot = Some(child); }
     // A blocking read on the child's stdout, one line per event, until the channel closes
     // or the child is killed. Killing the child is what ends this thread: stdout hits EOF.
+    // The sentinel matters: the App stretches its timer to 60 s while a stream is live, so a
+    // stream that ended (daemon restart, VM stopped) has to be able to say so.
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if on_event.send(line).is_err() { break; }
+            if on_event.send(line).is_err() { return; }
         }
+        let _ = on_event.send(EVENTS_END.to_string());
     });
     Ok("streaming".into())
 }

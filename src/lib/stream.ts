@@ -18,6 +18,8 @@ const NOISE_ACTION = /^exec_/;
 /** Event types that can change something a view renders. */
 const RELEVANT_TYPE: Record<string, true> = { container: true, image: true, network: true, volume: true };
 
+const END = "__events_end__";
+
 let channel: Channel<string> | null = null;
 let generation = 0;
 let timer: number | undefined;
@@ -36,14 +38,20 @@ export async function startEventStream(onChange: () => void): Promise<void> {
   const ch = new Channel<string>();
   ch.onmessage = (line: string) => {
     if (mine !== generation) return;
-    let event: { Type?: string; Action?: string };
-    try {
-      event = JSON.parse(line);
-    } catch {
-      return; // A partial line from a killed child is not worth an error.
+    // The child closed (daemon restarted, VM stopped). Drop the claim of a live stream so the
+    // App returns to its fifteen-second refresh, and read once now that we are blind.
+    if (line === END) {
+      streaming = false;
+      listener?.();
+      return;
     }
-    if (!event?.Type || RELEVANT_TYPE[event.Type] !== true) return;
-    if (event.Action && NOISE_ACTION.test(event.Action)) return;
+    // `type\taction`; the backend asks docker for exactly these two fields.
+    const tab = line.indexOf("\t");
+    if (tab <= 0) return;
+    const type = line.slice(0, tab);
+    const action = line.slice(tab + 1);
+    if (RELEVANT_TYPE[type] !== true) return;
+    if (action && NOISE_ACTION.test(action)) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
       timer = undefined;

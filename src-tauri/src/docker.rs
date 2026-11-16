@@ -73,14 +73,16 @@ fn nerdctl_argv(profile: &str, args: &[&str]) -> Vec<String> {
 }
 
 /// `docker events` argv for the live-refresh stream. The type filters keep the volume down:
-/// exec, health-check and plugin events never change what a view renders.
+/// exec, health-check and plugin events never change what a view renders. The format carries
+/// only the two fields the window reads (type, action): the full event object is ~537 B per
+/// line of labels and every one of them was parsed to be thrown away.
 const EVENTS_ARGS: &[&str] = &[
     "events",
     "--filter", "type=container",
     "--filter", "type=image",
     "--filter", "type=network",
     "--filter", "type=volume",
-    "--format", "{{json .}}",
+    "--format", "{{.Type}}\t{{.Action}}",
 ];
 
 /// Kept pure so the containerd decision is testable without touching the process-wide client.
