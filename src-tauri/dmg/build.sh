@@ -26,7 +26,21 @@ drop_x=480
 icon_y=170
 dir=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
-detach_volume() { hdiutil detach "/Volumes/$volume" >/dev/null 2>&1 || true; }
+# A freshly mounted HFS+ volume is briefly held by Finder, Spotlight and sync, and
+# a single hdiutil detach then fails with "Resource busy" — under `set -e` that
+# takes the whole build with it. One GitHub runner hit exactly that while the
+# other finished, so retry, then force: this image is a scratch copy and a forced
+# eject of it costs nothing.
+detach() {
+	for _ in 1 2 3 4 5; do
+		if hdiutil detach "$1" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+	done
+	hdiutil detach -force "$1" >/dev/null 2>&1 || true
+}
+detach_volume() { detach "/Volumes/$volume"; }
 cleanup() {
 	detach_volume
 	rm -rf "$work"
@@ -101,7 +115,7 @@ on run argv
 	return ((item 1 of appPos) as string) & " " & ((item 2 of appPos) as string) & " " & ((item 1 of dropPos) as string) & " " & ((item 2 of dropPos) as string)
 end run
 AS
-	hdiutil detach "$mount" >/dev/null
+	detach "$mount"
 }
 
 # One Finder pass at icon y = $1. Any .DS_Store from an earlier pass is removed
@@ -118,6 +132,11 @@ style_at() {
 		exit 1
 	fi
 	rm -f "$mount/.DS_Store"
+	# Spotlight starts indexing a new HFS+ volume immediately and holds it while
+	# Finder writes .DS_Store, which is one of the ways a detach ends up busy. The
+	# volume is a scratch copy that is about to be converted; -n keeps a local run
+	# without passwordless sudo working.
+	sudo -n mdutil -i off "$mount" >/dev/null 2>&1 || true
 	wait_for_finder "$mount"
 
 	osascript <<AS
@@ -151,12 +170,12 @@ AS
 
 	test -s "$mount/.DS_Store" || {
 		echo "build.sh: Finder did not write .DS_Store" >&2
-		hdiutil detach "$mount" >/dev/null 2>&1 || true
+		detach "$mount"
 		exit 1
 	}
 
 	sync
-	hdiutil detach "$mount" >/dev/null
+	detach "$mount"
 }
 
 wanted="$app_x $icon_y $drop_x $icon_y"
