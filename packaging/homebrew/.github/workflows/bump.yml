@@ -19,10 +19,11 @@ jobs:
 
       - name: render the cask from the newest release
         env:
-          # The app repo is private, so the tap's own GITHUB_TOKEN cannot read its
-          # releases: a fine-grained PAT with Contents: read on dm0xa/runtime-desk
-          # is stored as the tap's RELEASE_TOKEN secret.
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # While the app repo is private the tap's own GITHUB_TOKEN cannot read its
+          # releases, so a fine-grained PAT with Contents: read on dm0xa/runtime-desk
+          # is stored as the tap's RELEASE_TOKEN secret. Once the app repo is public
+          # that secret can be deleted and the plain token takes over.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: ./bump.sh
 
       - name: commit when the cask moved
