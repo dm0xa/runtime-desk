@@ -6,6 +6,13 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.1.5 — 2026-11-17
+
+### Fixed
+
+- **A new release is announced once.** Settings › About already names the version inline, so the launch banner now stands down while that panel is open instead of repeating it.
+- **Banners share the column they sit above**, matching a Settings pane's width and keeping the page gutter in narrow windows.
+
 ## 1.1.4 — 2026-11-16
 
 ### Fixed
