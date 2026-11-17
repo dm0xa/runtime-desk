@@ -12,6 +12,8 @@ export type Notice = {
   evidence?: string;
   /** Docker container this notice is about, so related actions can clear it. */
   containerId?: string;
+  /** App-wide fact a page also states inline, so the page can retract the banner. */
+  tag?: "app-release";
   actions?: { label: string; run: () => void }[];
 };
 

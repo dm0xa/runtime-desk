@@ -363,7 +363,7 @@ Read-only views whose button flips to Hide once open.
 
 ### About
 
-Identifies the app rather than reporting state, the way a Mac About panel does: a centered column with the logo, the name, and the version in mono beside the license (`v1.1.3 · GPL-3.0-only`). A short paragraph says what the app is and which CLIs it reads, then `Built with Tauri 2 and React 19 by dm0xa.` Below, one line of text links opening outside the app — Repository, Report an issue, Colima, License (the full GPL-3.0 text) — and a quiet Buy me a coffee link. A hairline closes with `Copyright © 2026 Runtime Desk contributors. GPL-3.0-only, without warranty.` The version comes from `package.json`.
+Identifies the app rather than reporting state, the way a Mac About panel does: a centered column with the logo, the name, and the version in mono beside the license (`v1.1.3 · GPL-3.0-only`). A short paragraph says what the app is and which CLIs it reads, then `Built with Tauri 2 and React 19 by dm0xa.` Below, one line of text links opening outside the app — Repository, Report an issue, Colima, License (the full GPL-3.0 text) — and a quiet Buy me a coffee link. A hairline closes with `Copyright © 2026 Runtime Desk contributors. GPL-3.0-only, without warranty.` While GitHub has a newer release, an inline row under the credits names it with **Open releases**; the launch banner for that same release hides while this panel is open, so the fact is stated once. The version comes from `package.json`.
 
 ### Delete profile
 

@@ -1405,7 +1405,6 @@ html.widget-drag .eye-btn { opacity: 0.65; transition: none; }
   .topbar, .toolbar { padding-left: 16px; padding-right: 16px; }
   .table-wrap, .panel { margin-left: 16px; }
   .settings .panel, .linux-grid .panel, .dash-grid .panel, .dash-grid .card { margin-left: 0; }
-  .notices { margin-left: 16px; margin-right: 16px; }
   .logs-head, .logs-toolbar { padding-left: 16px; padding-right: 16px; }
 }
 
@@ -1575,6 +1574,9 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
    so the card survives colour-blindness, Increase Contrast and dark mode. Detail is
    evidence: two clamped lines until the user asks for the raw CLI text. */
 .notices { display: flex; flex-direction: column; gap: 8px; margin: 0 20px 10px; }
+/* Narrow windows reclaim page padding, and this has to live after the base rule: a
+   `margin` shorthand in the base block would otherwise out-rank the override. */
+@media (max-width: 1100px) { .notices { margin: 0 16px 10px; } }
 .notice-card {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 9px 10px 9px 12px; border-radius: 8px; background: var(--panel);
@@ -1583,6 +1585,9 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 .notice-card.error { background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
 .notice-card.success { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
 .notice-card.info { background: var(--panel-2); }
+/* Settings panes are 860px, so a banner above one matches that column instead of ending
+   short of the panel edge and leaving a ragged left stack. */
+.page-scroll.page-settings .notice-card { max-width: 860px; }
 .notice-icon { flex: none; display: inline-flex; margin-top: 1px; color: var(--muted); }
 .notice-card.error .notice-icon { color: var(--red-text); }
 .notice-card.success .notice-icon { color: var(--green-text); }

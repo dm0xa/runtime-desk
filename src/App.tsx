@@ -1106,11 +1106,21 @@ function App() {
     appReleaseAnnounced.current = true;
     pushNotice({
       kind: "info",
+      tag: "app-release",
       title: `Runtime Desk ${next.latest} is available`,
       detail: `You are running ${next.installed}. Download the new build from GitHub.`,
       actions: [{ label: "Open releases", run: () => openUrl(next.url, "Opened releases") }],
     });
   }
+  /**
+   * Settings › About states the same release inline with the same action, so the banner
+   * stands down while that panel is on screen — one fact, one place. Leaving About does not
+   * bring it back: the panel already carried the announcement.
+   */
+  useEffect(() => {
+    if (tab !== "settings" || settingsTab !== "about") return;
+    setNotices((list) => (list.some((n) => n.tag === "app-release") ? list.filter((n) => n.tag !== "app-release") : list));
+  }, [tab, settingsTab, appRelease]);
   async function loadConfig(name: string) {
     if (!name) return;
     setCfg(await safe(invoke<ProfileConfig>("profile_config_cmd", { profile: name }), null as unknown as ProfileConfig));
@@ -1991,7 +2001,7 @@ function App() {
             refreshing={busy || refreshing || pageRefreshing || (tab === "cleanup" && cleanupLoading)}
           />
           {/* Only the page body scrolls, so the header and its actions stay put. */}
-          <div className={`page-scroll ${["dashboard","containers","images","volumes","networks"].includes(tab) || tab.startsWith("podman-") ? "" : "scroll"}`}>
+          <div className={`page-scroll ${["dashboard","containers","images","volumes","networks"].includes(tab) || tab.startsWith("podman-") ? "" : "scroll"}${tab === "settings" ? " page-settings" : ""}`}>
           <Notices notices={notices} onDismiss={(id) => setNotices((list) => list.filter((n) => n.id !== id))} />
 
           {shownTab === "__waiting" && (
@@ -3098,7 +3108,8 @@ function App() {
                       <div className="about-update" role="status">
                         <span className="about-update-icon"><UpgradeIcon size={15} /></span>
                         <span className="about-update-text">
-                          <span>Runtime Desk {appRelease.latest} is available</span>
+                          {/* The panel already names the app above, so the row names the version. */}
+                          <span>Version {appRelease.latest} is available</span>
                           <span>You are running {appRelease.installed}.</span>
                         </span>
                         <button className="btn ghost" onClick={() => openUrl(appRelease.url, "Opened releases")}>Open releases</button>
