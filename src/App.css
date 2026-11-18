@@ -1653,24 +1653,33 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
    The message is primary ink; colour lives in the 15px icon and a 7% wash of the panel,
    so the card survives colour-blindness, Increase Contrast and dark mode. Detail is
    evidence: two clamped lines until the user asks for the raw CLI text. */
-.notices { display: flex; flex-direction: column; gap: 8px; margin: 0 20px 10px; }
+.notices { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 0 20px 10px; }
 /* Narrow windows reclaim page padding, and this has to live after the base rule: a
    `margin` shorthand in the base block would otherwise out-rank the override. */
 @media (max-width: 1100px) { .notices { margin: 0 16px 10px; } }
+/* The card hugs its sentence. One line of text must not become a 760px empty runway with
+   the dismiss button parked at the far end; `align-items: flex-start` on the stack is what
+   lets it shrink, since a column flex container stretches its children by default. */
 .notice-card {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 9px 10px 9px 12px; border-radius: 8px; background: var(--panel);
-  box-shadow: inset 0 0 0 0.5px var(--sep); max-width: 760px;
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 8px 8px 8px 10px; border-radius: 9px; background: var(--panel);
+  box-shadow: inset 0 0 0 0.5px var(--sep); width: fit-content; max-width: 760px;
 }
-.notice-card.error { background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
-.notice-card.success { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.notice-card.error { background: color-mix(in srgb, var(--red) 7%, var(--panel)); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--red) 28%, var(--sep)); }
+.notice-card.success { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 28%, var(--sep)); }
 .notice-card.info { background: var(--panel-2); }
 /* Settings panes are 860px, so a banner above one matches that column instead of ending
    short of the panel edge and leaving a ragged left stack. */
 .page-scroll.page-settings .notice-card { max-width: 860px; }
-.notice-icon { flex: none; display: inline-flex; margin-top: 1px; color: var(--muted); }
-.notice-card.error .notice-icon { color: var(--red-text); }
-.notice-card.success .notice-icon { color: var(--green-text); }
+/* State sits in a tinted 20px well: the icon alone is easy to miss at 15px, and the well
+   keeps the glyph aligned with the title's cap height on a two-line card. */
+.notice-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px; color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.notice-card.error .notice-icon { color: var(--red-text); background: color-mix(in srgb, var(--red) 16%, transparent); }
+.notice-card.success .notice-icon { color: var(--green-text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .notice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .notice-title { font-size: 13px; font-weight: 600; line-height: 1.35; color: var(--text); }
 .notice-detail { font-size: 12px; color: var(--muted); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
