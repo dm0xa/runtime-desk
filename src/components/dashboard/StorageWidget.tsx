@@ -2,9 +2,11 @@ import { useState } from "react";
 import type { DashboardContext } from "./context";
 import { fmtSize } from "../../lib/format";
 
-type Provider = "docker" | "podman";
+type Provider = "all" | "docker" | "podman";
 
-type Slice = { label: string; value: number; color: string; tab: string };
+/** `tab` is absent on the combined view: its rows sum two engines whose lists live on separate
+ *  pages, so there is no single page a row could open. */
+type Slice = { label: string; value: number; color: string; tab?: string };
 
 const COLORS = { images: "#22c55e", containers: "#58a6ff", volumes: "#d29922", cache: "#a78bfa" };
 
@@ -31,12 +33,12 @@ function StorageDonut({ slices, onOpen }: { slices: Slice[]; onOpen: (tab: strin
                 strokeDasharray={`${len} ${c - len}`}
                 strokeDashoffset={-acc}
                 opacity={hover && hover !== seg.label ? 0.3 : 1}
-                style={{ cursor: "pointer", transition: "stroke-width 0.12s ease, opacity 0.12s ease" }}
+                style={{ cursor: seg.tab ? "pointer" : "default", transition: "stroke-width 0.12s ease, opacity 0.12s ease" }}
                 onMouseEnter={() => setHover(seg.label)}
                 onMouseLeave={() => setHover(null)}
-                onClick={() => onOpen(seg.tab)}
+                onClick={() => { if (seg.tab) onOpen(seg.tab); }}
               >
-                <title>{`${seg.label}: ${fmtSize(seg.value)} — click to open`}</title>
+                <title>{`${seg.label}: ${fmtSize(seg.value)}${seg.tab ? " — click to open" : ""}`}</title>
               </circle>
             );
             acc += len;
@@ -49,18 +51,27 @@ function StorageDonut({ slices, onOpen }: { slices: Slice[]; onOpen: (tab: strin
       <div className="legend">
         {slices.map((seg) => {
           const pct = total ? Math.round((seg.value / total) * 100) : 0;
+          const cells = (
+            <>
+              <span className="legend-dot" style={{ background: seg.color }} />
+              <span className="legend-label">{seg.label}</span>
+              <span className="legend-value">{fmtSize(seg.value)}</span>
+              <span className="legend-pct">{pct}%</span>
+            </>
+          );
+          const tab = seg.tab;
+          if (!tab) {
+            return <div key={seg.label} className="legend-row">{cells}</div>;
+          }
           return (
             <button
               key={seg.label}
               className={`legend-row legend-btn ${hover === seg.label ? "active" : ""}`}
               onMouseEnter={() => setHover(seg.label)}
               onMouseLeave={() => setHover(null)}
-              onClick={() => onOpen(seg.tab)}
+              onClick={() => onOpen(tab)}
             >
-              <span className="legend-dot" style={{ background: seg.color }} />
-              <span className="legend-label">{seg.label}</span>
-              <span className="legend-value">{fmtSize(seg.value)}</span>
-              <span className="legend-pct">{pct}%</span>
+              {cells}
             </button>
           );
         })}
@@ -72,15 +83,18 @@ function StorageDonut({ slices, onOpen }: { slices: Slice[]; onOpen: (tab: strin
 export function StorageWidget({ disk, podmanDisk, podmanMachines, tools, running, selected, setTab, profiles, startSelectedOrCreate }: DashboardContext) {
   const [picked, setPicked] = useState<Provider | null>(null);
   const selectedRunning = running.some((p) => p.name === selected);
-  const podmanUp = Boolean(tools?.podman) && podmanMachines.some((m) => m.running);
+  const hasPodman = Boolean(tools?.podman);
+  const podmanUp = hasPodman && podmanMachines.some((m) => m.running);
 
   const providers: { id: Provider; label: string }[] = [
-    { id: "docker", label: "Docker" },
-    ...(tools?.podman ? [{ id: "podman" as const, label: "Podman" }] : []),
+    ...(hasPodman ? [{ id: "all" as const, label: "All" }] : []),
+    { id: "docker" as const, label: "Docker" },
+    ...(hasPodman ? [{ id: "podman" as const, label: "Podman" }] : []),
   ];
-  // Open on the provider that has a running engine; a stopped profile leaves Docker
-  // showing its empty state, which is the honest answer.
-  const preferred: Provider = selectedRunning ? "docker" : podmanUp ? "podman" : "docker";
+  // Open on the combined view only when it actually combines: one engine answering keeps its
+  // own donut (a sum plus an apologetic footnote would read as a defect). All stays one click
+  // away and then names whichever engine is missing.
+  const preferred: Provider = selectedRunning && podmanUp ? "all" : selectedRunning ? "docker" : podmanUp ? "podman" : "docker";
   const active = picked && providers.some((p) => p.id === picked)
     ? picked
     : providers.some((p) => p.id === preferred) ? preferred : providers[0].id;
@@ -96,6 +110,16 @@ export function StorageWidget({ disk, podmanDisk, podmanMachines, tools, running
     { label: "Containers", value: podmanDisk.containers, color: COLORS.containers, tab: "podman-containers" },
     { label: "Volumes", value: podmanDisk.volumes, color: COLORS.volumes, tab: "podman-volumes" },
   ];
+  // Only engines that were actually read contribute: a stopped profile must not add zeros that
+  // read as "Docker is empty". Build cache has no Podman counterpart, so the row exists only
+  // while Docker answered.
+  const allSlices: Slice[] = [
+    { label: "Images", value: (selectedRunning ? disk.images : 0) + (podmanUp ? podmanDisk.images : 0), color: COLORS.images },
+    { label: "Containers", value: (selectedRunning ? disk.containers : 0) + (podmanUp ? podmanDisk.containers : 0), color: COLORS.containers },
+    { label: "Volumes", value: (selectedRunning ? disk.volumes : 0) + (podmanUp ? podmanDisk.volumes : 0), color: COLORS.volumes },
+    ...(selectedRunning ? [{ label: "Build cache", value: disk.build_cache, color: COLORS.cache }] : []),
+  ];
+  const allReclaimable = (selectedRunning ? disk.reclaimable : 0) + (podmanUp ? podmanDisk.reclaimable : 0);
 
   return (
     <div className="panel storage-panel">
@@ -117,6 +141,27 @@ export function StorageWidget({ disk, podmanDisk, podmanMachines, tools, running
           </div>
         )}
       </div>
+
+      {active === "all" && (selectedRunning || podmanUp ? (
+        <>
+          <StorageDonut slices={allSlices} onOpen={setTab} />
+          <div className="storage-foot">
+            <span className="muted">
+              Read by {selectedRunning ? <code>docker system df</code> : null}
+              {selectedRunning && podmanUp ? " + " : null}
+              {podmanUp ? <code>podman system df</code> : null}
+              {selectedRunning && !podmanUp ? " — no Podman machine running" : null}
+              {!selectedRunning && podmanUp ? <> {"— profile "}<code>{selected}</code>{" is stopped"}</> : null}
+            </span>
+            <span className="muted">{fmtSize(allReclaimable)} reclaimable</span>
+          </div>
+        </>
+      ) : (
+        <p className="muted storage-note">
+          {profiles.length === 0 ? "No Colima profile yet." : <>Profile <code>{selected}</code> is stopped.</>} No Podman machine is running either, so there is nothing to read.{" "}
+          <button className="inv-link" onClick={startSelectedOrCreate}>{profiles.length === 0 ? "New profile…" : "Start profile"}</button>
+        </p>
+      ))}
 
       {active === "docker" && (selectedRunning ? (
         <>

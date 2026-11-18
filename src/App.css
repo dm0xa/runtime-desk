@@ -457,12 +457,17 @@ code { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; }.logo
 .storage-head h3 { margin: 0; }
 .storage-note { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 .storage-note code, .storage-foot code { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11px; color: var(--text); }
-.storage-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 11.5px; }
+/* The combined view's footnote names two engines, so it may need two lines; neither
+   `docker system df` nor the reclaimable figure may be split across one. */
+.storage-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px 10px; margin-top: 10px; font-size: 11.5px; flex-wrap: wrap; }
+.storage-foot > span { white-space: nowrap; }
 .storage-foot .inv-link { font-size: 11.5px; color: var(--muted); padding: 0; }
 .storage-foot .inv-link:hover { color: var(--text); }
 .donut { flex: 0 0 auto; }
 .legend { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.legend-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+/* Static rows (the combined view has no page to open) carry the same padding as .legend-btn
+   so their dots line up with clickable rows above and below in the same card. */
+.legend-row { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 4px 6px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
 .legend-label { flex: 1; }
 .legend-value { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 12px; }

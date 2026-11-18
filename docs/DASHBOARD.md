@@ -67,7 +67,7 @@ errors.
 | `arch` | Architecture | Architecture and mount type | Machine | 1 | 1–2 | hidden |
 | `socket` | Docker socket | Socket path | Machine | 1 | 1–2 | hidden |
 | `version` | Colima version | Installed version | Settings · General | 1 | 1–2 | hidden |
-| `storage` | Storage usage | Per-engine donuts (`docker system df` / `podman system df`); chips switch providers; a stopped engine is named, not zero | Docker lists, Build cache; reclaimable opens Cleanup; Podman cells open Podman lists | 2 | 2–4 | hidden |
+| `storage` | Storage usage | Chips All / Docker / Podman; All sums every engine that answered and is the default when both answer, naming a stopped engine in the footnote; per-engine donuts read `docker system df` / `podman system df` | Docker lists, Build cache; reclaimable opens Cleanup; Podman cells open Podman lists; All cells are not links (no combined page) | 2 | 2–4 | hidden |
 | `profiles` | Profiles overview | Status of each profile | Chooses the profile | 2 | 2–4 | hidden |
 | `recent` | Recent containers | Latest containers with origin (Docker, Compose) | View all → Containers; each row opens it in Sherlock | 4 | 2–4 | hidden |
 
