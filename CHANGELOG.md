@@ -6,6 +6,9 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+- **Settings is one page with tabs, not a second sidebar.** General, Sidebar, Configuration and About sit in a segmented bar at the top of the content (arrow keys move the selection); the window title is simply **Settings**. The rail that repeated the navigation beside the sidebar is gone, **Delete profile** moved to the bottom of General under the facts it destroys, and the app menu's **About Runtime Desk** opens the same page instead of a second stock panel.
+- **The sidebar is one list.** Settings sits below the scrolling nav and above the profile switcher, without a one-row **System** heading, and group headings gain separation so the five sections read as sections rather than as rows.
+- **The Help menu is a Mac Help menu.** **Keyboard Shortcuts** (⌘/), **Runtime Desk Guide** and **Report an Issue…** replace the single generic item, and **Show Sidebar** is now **Toggle Sidebar**, which is what it does.
 - **A mount reads as a path, not a wrapped sentence.** Related › Mounts gives each row two lines — the host path or volume name, then `→ destination · kind` indented underneath — and a long host path now breaks after its `/` separators instead of mid-word beside the destination.
 ## 1.3.0 — 2026-11-18
 

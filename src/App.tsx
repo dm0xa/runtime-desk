@@ -215,19 +215,20 @@ const PAGE_SEARCH: Partial<Record<string, { placeholder: string; label: string }
   "podman-networks": { placeholder: "Search networks...", label: "networks" },
 };
 
-type SettingsTab = "general" | "sidebar" | "configuration" | "about" | "danger";
+type SettingsTab = "general" | "sidebar" | "configuration" | "about";
 type NetworkScope = { network: string; names: string[] };
 /** One restorable point on the back stack: the tab plus what that tab was showing. */
 type Screen = { tab: string; trail: Subject[]; settingsTab: SettingsTab; search: string; networkScope: NetworkScope | null };
 
-/** Settings sub-sections. The rail lives inside the sidebar, expanded under Settings. */
+/** Settings sub-sections, a segmented bar at the top of the page. A second sidebar
+ *  column next to the navigation made two competing lists; tabs name the section
+ *  in the content, the way a Mac settings window names it in its toolbar. */
 const SETTINGS_TABS = [
   { id: "general", label: "General", Icon: SlidersIcon },
   { id: "sidebar", label: "Sidebar", Icon: PanelLeftIcon },
   { id: "configuration", label: "Configuration", Icon: FileCodeIcon },
   { id: "about", label: "About", Icon: InfoIcon },
 ] as const;
-const SETTINGS_DANGER = { id: "danger", label: "Delete profile", Icon: TriangleAlertIcon } as const;
 
 /** Install guidance shown when a required CLI is missing. */
 
@@ -380,7 +381,7 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => {
     try {
       const saved = localStorage.getItem("runtimeDesk.settingsTab");
-      if (saved && [...SETTINGS_TABS.map((t) => t.id), SETTINGS_DANGER.id].includes(saved as SettingsTab)) {
+      if (saved && SETTINGS_TABS.some((t) => t.id === saved)) {
         return saved as SettingsTab;
       }
     } catch { /* private mode */ }
@@ -1273,6 +1274,10 @@ function App() {
         // macOS puts Settings on ⌘, in every app; the menu bar sends the same command.
         e.preventDefault();
         navToRef.current({ tab: "settings", settingsTab: "general" });
+      } else if (mod && e.key === "/") {
+        // The Help menu's shortcut; browsers give ⌘? as Shift-/, which the "?" branch handles.
+        e.preventDefault();
+        setShowHelp(true);
       } else if (e.key === "Escape") {
         setShowCreate(false); setShowPrune(false); setEditing(false); setLogTarget(null); setShowHelp(false);
       } else if (e.key === "?" && !inField) {
@@ -1290,11 +1295,16 @@ function App() {
     listen<string>("menu", (event) => {
       switch (event.payload) {
         case "settings": navToRef.current({ tab: "settings", settingsTab: "general" }); break;
+        // One About surface: the app menu opens the Settings tab, not a second stock panel
+        // with different facts beside it.
+        case "about": navToRef.current({ tab: "settings", settingsTab: "about" }); break;
         case "refresh": void pageRefreshRef.current(); break;
         case "search": window.dispatchEvent(new Event("colima:search")); break;
         case "toggle-sidebar": setSidebarHidden((hidden) => !hidden); break;
         case "new-profile": setForm({ ...blankForm }); setShowCreate(true); break;
-        case "help": setShowHelp(true); break;
+        case "shortcuts": setShowHelp(true); break;
+        case "docs": openUrl(`${REPO_URL}/blob/main/docs/USAGE.md`, "Opened usage guide"); break;
+        case "issue": openUrl(`${REPO_URL}/issues/new`, "Opened issue form"); break;
       }
     })
       .then((unlisten) => { if (alive) stop = unlisten; else unlisten(); })
@@ -1676,7 +1686,7 @@ function App() {
   const awaitingPodman = tab.startsWith("podman-") && tab !== "podman-machines" && !podmanUp;
   const shownTab = blocked ? "__blocked" : awaitingDaemon ? "__waiting" : awaitingPodman ? "__podman-waiting" : tab;
   const headerTitle = tab === "settings"
-    ? `Settings · ${settingsTab === SETTINGS_DANGER.id ? SETTINGS_DANGER.label : SETTINGS_TABS.find((t) => t.id === settingsTab)?.label ?? ""}`
+    ? "Settings"
     : tab.startsWith("podman-") ? `Podman ${title}`
     : ["containers", "images", "volumes", "networks"].includes(tab) ? `Docker ${title}`
     : title;
@@ -1867,7 +1877,7 @@ function App() {
           <div className="sidebar-grip" data-tauri-drag-region />
           <div className="brand"><img src="/logo.png" className="logo-img" alt="Runtime Desk" /> Runtime Desk</div>
           <div className="side-nav">
-            {NAV_GROUPS.map((group) => {
+            {NAV_GROUPS.filter((group) => group.title !== "System").map((group) => {
               if (hiddenSections[group.title]) return null;
               // A section only appears when its tooling is present.
               const items = group.items.filter((n) => !gateFor(n).missing);
@@ -1924,6 +1934,20 @@ function App() {
               </div>
             )}
           </div>
+          {/* Settings is an app-level destination, not a peer of Docker or Podman: it sits
+              below the scrolling nav, above the profile switcher, with no group heading of
+              its own to make a one-row section. */}
+          <div className="side-foot">
+            <button
+              className={`nav-item side-settings ${tab === "settings" ? "active" : ""}`}
+              aria-current={tab === "settings" ? "page" : undefined}
+              title="Settings (⌘,)"
+              onClick={() => navTo({ tab: "settings", search: "" })}
+            >
+              <GearIcon size={16} />
+              <span>Settings</span>
+            </button>
+          </div>
           <div className="side-profiles">
             <div className="side-section-title">Profiles</div>
             <div className="side-profile-list">
@@ -1956,32 +1980,6 @@ function App() {
             <button className="btn ghost side-create" onClick={() => { setForm({ ...blankForm }); setShowCreate(true); }}>+ Create new profile</button>
           </div>
         </aside>
-        {tab === "settings" && (
-          <aside className="settings-rail" aria-label="Settings sections">
-            {SETTINGS_TABS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                className={`nav-item ${settingsTab === id ? "active" : ""}`}
-                title={label}
-                aria-current={settingsTab === id ? "true" : undefined}
-                onClick={() => setSettingsTab(id)}
-              >
-                <Icon size={16} />
-                <span>{label}</span>
-              </button>
-            ))}
-            <div className="settings-rail-sep" />
-            <button
-              className={`nav-item danger ${settingsTab === SETTINGS_DANGER.id ? "active" : ""}`}
-              title={SETTINGS_DANGER.label}
-              aria-current={settingsTab === SETTINGS_DANGER.id ? "true" : undefined}
-              onClick={() => setSettingsTab(SETTINGS_DANGER.id)}
-            >
-              <SETTINGS_DANGER.Icon size={16} />
-              <span>{SETTINGS_DANGER.label}</span>
-            </button>
-          </aside>
-        )}
         <div className="content">
           {(busy || refreshing) && <div className="busy-bar" />}
           {/* Back appears only after a drill-down: a row's Investigator, a dashboard
@@ -2882,7 +2880,38 @@ function App() {
           )}
           {shownTab === "settings" && (
             <div className="settings">
-              <div className="settings-body">
+              <div
+                className="settings-tabs"
+                role="tablist"
+                aria-label="Settings sections"
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                  const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+                  const i = tabs.indexOf(document.activeElement as HTMLButtonElement);
+                  if (i < 0) return;
+                  e.preventDefault();
+                  const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+                  next.focus();
+                  setSettingsTab(SETTINGS_TABS[tabs.indexOf(next)].id);
+                }}
+              >
+                {SETTINGS_TABS.map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={settingsTab === id}
+                    aria-controls="settings-panel"
+                    tabIndex={settingsTab === id ? 0 : -1}
+                    className={`settings-tab ${settingsTab === id ? "active" : ""}`}
+                    title={label}
+                    onClick={() => setSettingsTab(id)}
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="settings-body" id="settings-panel" role="tabpanel" aria-label={SETTINGS_TABS.find((t) => t.id === settingsTab)?.label}>
                 {settingsTab === "general" && (
                   <>
                   <section className="panel settings-panel">
@@ -2988,6 +3017,21 @@ function App() {
                         );
                       })}
                     </table>
+                  </section>
+
+                  {/* Destructive and profile-scoped: it belongs under the facts it destroys,
+                      not behind a tab of its own that reads as a peer of General. */}
+                  <section className="panel settings-panel settings-danger">
+                    <div className="settings-danger-row">
+                      <span className="settings-danger-icon" aria-hidden="true"><TriangleAlertIcon size={16} /></span>
+                      <div className="settings-danger-text">
+                        <h3>Delete {selected}</h3>
+                        <p>Removes the profile with its VM disk, images and volumes. This cannot be undone.</p>
+                      </div>
+                      <button className="btn danger" disabled={busy} onClick={() => { setDeleteConfirm(""); setShowDelete(true); }}>
+                        Delete profile…
+                      </button>
+                    </div>
                   </section>
                   </>
                 )}
@@ -3137,17 +3181,6 @@ function App() {
                   </section>
                 )}
 
-                {settingsTab === "danger" && (
-                  <section className="panel settings-panel danger-panel">
-                    <header className="settings-head">
-                      <h2>Delete profile</h2>
-                      <p>Removes <code>{selected}</code> with its VM disk, images and volumes. This cannot be undone.</p>
-                    </header>
-                    <button className="btn danger" disabled={busy} onClick={() => { setDeleteConfirm(""); setShowDelete(true); }}>
-                      Delete {selected} + data…
-                    </button>
-                  </section>
-                )}
               </div>
             </div>
           )}

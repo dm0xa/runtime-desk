@@ -9,19 +9,25 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 /// Builds the whole bar. Accelerators are the system ones (⌘N, ⌘F, ⌘R, ⌘,) so they are
 /// never reassigned to something a Mac user would not expect.
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    // One About surface: the app menu opens Settings › About, which is the page that
+    // states the version, license, links and update state. Removed: the stock panel,
+    // which showed a second, thinner set of the same facts.
+    let about = MenuItem::with_id(app, "about", "About Runtime Desk", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let new_profile = MenuItem::with_id(app, "new-profile", "New Profile…", true, Some("CmdOrCtrl+N"))?;
     let search = MenuItem::with_id(app, "search", "Search…", true, Some("CmdOrCtrl+F"))?;
     let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, Some("CmdOrCtrl+R"))?;
-    let sidebar = MenuItem::with_id(app, "toggle-sidebar", "Show Sidebar", true, Some("CmdOrCtrl+Alt+S"))?;
-    let help = MenuItem::with_id(app, "help", "Runtime Desk Help", true, None::<&str>)?;
+    let sidebar = MenuItem::with_id(app, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+Alt+S"))?;
+    let shortcuts = MenuItem::with_id(app, "shortcuts", "Keyboard Shortcuts", true, Some("CmdOrCtrl+/"))?;
+    let guide = MenuItem::with_id(app, "docs", "Runtime Desk Guide", true, None::<&str>)?;
+    let issue = MenuItem::with_id(app, "issue", "Report an Issue…", true, None::<&str>)?;
 
     let app_menu = Submenu::with_items(
         app,
         "Runtime Desk",
         true,
         &[
-            &PredefinedMenuItem::about(app, Some("About Runtime Desk"), None)?,
+            &about,
             &PredefinedMenuItem::separator(app)?,
             &settings,
             &PredefinedMenuItem::separator(app)?,
@@ -85,7 +91,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
-    let help_menu = Submenu::with_items(app, "Help", true, &[&help])?;
+    // Mac Help menus carry the shortcuts sheet and the places a user looks when the
+    // app puzzles them; the separator keeps the issue form apart from the references.
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&shortcuts, &guide, &PredefinedMenuItem::separator(app)?, &issue],
+    )?;
 
     Menu::with_items(
         app,

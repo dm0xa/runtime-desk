@@ -50,7 +50,7 @@ Docker-runtime profiles use the Docker CLI with `DOCKER_HOST` set to the profile
 | Restart | Restarts the VM. Disabled while it is stopped. |
 | Delete profile… | Opens the delete dialog below. |
 
-One dialog serves that menu and Settings → Delete profile: it removes the profile **and its data** — VM disk, containers, images, volumes — irreversibly; lists counts when read, unknown when not; refuses while running, **Stop profile** replacing the confirmation; needs the name typed before **Delete profile and data**. `colima delete <profile> --data --force`.
+One dialog serves that menu and Settings › General's **Delete profile…**: it removes the profile **and its data** — VM disk, containers, images, volumes — irreversibly; lists counts when read, unknown when not; refuses while running, **Stop profile** replacing the confirmation; needs the name typed before **Delete profile and data**. `colima delete <profile> --data --force`.
 
 ### Create a profile
 
@@ -335,7 +335,7 @@ The PID is written next to Colima's own state, so **Stop server** works after qu
 
 ## Settings
 
-Five entries: General, Sidebar, Configuration, About, plus a separate danger entry, Delete profile.
+Four tabs across the top of the page: General, Sidebar, Configuration, About. The tab bar is a segmented control at the page's top edge; the window title stays simply **Settings**.
 
 ### General
 
@@ -348,9 +348,11 @@ Five entries: General, Sidebar, Configuration, About, plus a separate danger ent
 
 **Tools on this machine**: every probed CLI grouped as Core, Container runtimes, Kubernetes, Virtual machines and AI workloads, with status (`installed` / `missing` / `checking…`), why the app wants it, and its install command with a copy button.
 
+**Delete `<profile>`** closes the tab: a warning row with **Delete profile…**, which opens the same dialog as the profile menu — it removes the profile and its data (VM disk, containers, images, volumes), lists counts when read, refuses while running (with **Stop profile** in place), and needs the name typed before the red confirm enables.
+
 ### Sidebar
 
-Hideable groups: Docker, Colima, Podman, Tools. Overview and System are always shown so the Dashboard and Settings stay reachable.
+Hideable groups: Docker, Colima, Podman, Tools. Overview and Settings are always reachable — Settings sits below the scrolling nav, above the profile switcher.
 
 Two group headers name their source, answering from different virtual machines: **Docker** carries the selected profile's name (or `no profile`), **Podman** the running or first machine's name (or `no machine`). **Colima** holds **Machine** and **Kubernetes**, since k3s runs inside that VM.
 
@@ -366,10 +368,6 @@ Read-only views whose button flips to Hide once open.
 ### About
 
 Identifies the app rather than reporting state, the way a Mac About panel does: a centered column with the logo, the name, and the version in mono beside the license (`v1.1.3 · GPL-3.0-only`). A short paragraph says what the app is and which CLIs it reads, then `Built with Tauri 2 and React 19 by dm0xa.` Below, one line of text links opening outside the app — Repository, Report an issue, Colima, License (the full GPL-3.0 text) — and a quiet Buy me a coffee link. A hairline closes with `Copyright © 2026 Runtime Desk contributors. GPL-3.0-only, without warranty.` While GitHub has a newer release, an inline row under the credits names it with **Open releases**; the launch banner for that same release hides while this panel is open, so the fact is stated once. The version comes from `package.json`.
-
-### Delete profile
-
-Deletes the selected profile and all data: containers, images, volumes, VM disk. **Delete `<profile>` + data…** opens the same dialog as the profile menu — counts listed when read, refuses while running (with **Stop profile** in place), and needs the name typed before the red confirm enables.
 
 ## Cleanup
 

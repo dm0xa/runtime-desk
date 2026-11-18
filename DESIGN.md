@@ -6,7 +6,6 @@ colors:
   sidebar: "#e9e9ec"
   panel: "#ffffff"
   panel-raised: "#f5f5f7"
-  rail: "#ffffff"
   sidebar-dark: "#232325"
   panel-dark: "#2c2c2e"
   panel-raised-dark: "#3a3a3c"
@@ -266,11 +265,11 @@ Two themes, one accent. Light default; dark is the GitHub-dark console.
 
 **The Ephemeral First Rule.** Time-sensitive state leads. Running container: Performance first, above the fact columns; stopped: dropped, because Lifecycle already says so. Static identity follows, then logs, then reference lists (environment, labels, build history, volume contents). Nothing live below a static card.
 
-**Window chrome.** `.titleBarStyle: Overlay`, hidden title, webview owns the frame. Traffic lights over the sidebar, which reserves a 38px `.sidebar-grip` for them and for dragging; content column opens with a 52px unified toolbar doubling as the drag region (`data-tauri-drag-region`, `core:window:allow-start-dragging`). Native menu bar carries ⌘N, ⌘R, ⌘F, ⌘, and full screen, each forwarded as one `menu` event.
+**Window chrome.** `.titleBarStyle: Overlay`, hidden title, webview owns the frame. Traffic lights over the sidebar, which reserves a 38px `.sidebar-grip` for them and for dragging; content column opens with a 52px unified toolbar doubling as the drag region (`data-tauri-drag-region`, `core:window:allow-start-dragging`). Native menu bar: Runtime Desk (About → Settings › About, Settings…), File (New Profile…, Close Window), Edit (text plus Find), View (Toggle Sidebar, Refresh, Enter Full Screen), Window (Minimize, Zoom, Bring All to Front) and Help (Keyboard Shortcuts ⌘/, Guide, Report an Issue…) — each forwarded as one `menu` event, accelerators left to macOS.
 
-**The window remembers itself.** `window.json` in the app config dir keeps the frame in screen points — size, position, maximized — and a launch applies it to a window created hidden, with a work-area fit pulling back a frame no monitor holds; last screen and sidebar visibility in `localStorage` on change. View → **Show Sidebar** (⌘⌥S) hides nav and settings rail together, persisting.
+**The window remembers itself.** `window.json` in the app config dir keeps the frame in screen points — size, position, maximized — and a launch applies it to a window created hidden, with a work-area fit pulling back a frame no monitor holds; last screen and sidebar visibility in `localStorage` on change. View → **Toggle Sidebar** (⌘⌥S) hides the nav and persists; Settings is a page with tabs, so nothing else depends on that column.
 
-- Fixed 224px sidebar, flexible content column, 1300×820 window (minimum 900×600); Settings adds a second column (`clamp(140px, 12vw, 240px)`) beside the nav.
+- Fixed 224px sidebar, flexible content column, 1300×820 window (minimum 900×600); Settings stays in the content column with a centered 404px tab bar over an 860px panel stack.
 - 8px rhythm: 20px page gutter, 14px under the toolbar, 16px card/panel inset, 12px between panels in a column, 14px between stacked list cards.
 - Toolbar title, toolbar icons, status bar and every card and table edge share the 20px gutter; panel headings and card labels sit 16px inside it (content + 36px), a table's first cell 14px inside the table (content + 34px).
 - Two vertical lines, never three. Every page uses that gutter, none adds its own, all narrow to 16px below 1100px.
@@ -279,7 +278,7 @@ Two themes, one accent. Light default; dark is the GitHub-dark console.
 
 A list is a card, not a page: `.table-wrap` hugs its rows and scrolls only when they run out of window. A 400px card under a 300px gap of canvas is correct; a card stretched to the window floor for five rows reads as an empty template.
 
-Sherlock is a two-column grid (`minmax(0,1.1fr) minmax(0,1fr)`) with full-width panels spanning both below. Below 1100px every two-column surface collapses to one and gutters drop to 16px; the settings rail keeps its labels at every width, tightening item padding only below 1000px.
+Sherlock is a two-column grid (`minmax(0,1.1fr) minmax(0,1fr)`) with full-width panels spanning both below. Below 1100px every two-column surface collapses to one and gutters drop to 16px; the settings tab bar centers at every width and wraps only when four labels no longer fit.
 
 ## Elevation & Depth
 
@@ -424,10 +423,10 @@ Controls 6px radius, panels and cards 10px, tiles and popovers 8px, modals 12px.
 - Back appears only after a drill-down: a row's Sherlock page, Activity's Open Containers icon, a network node's list, a notice's action, "Open settings" from a blocked prerequisite. Roots (sidebar, ⌘digit, global search, status bar) are one click away, so they never stack, clear drill-down history, and render no control. A root's title starts on the text column (20px gutter + 16px inset), no reserved slot; a drill-down adds the 26px `--ctl-h` control and shifts the title right by its width plus the 6px gap.
 - The sidebar carries no search box; the page header's is the only one, so a list page never shows two fields. ⌘K focuses it in Global mode.
 - Docker and Podman share one item vocabulary: short sidebar labels under the group heading, and a topbar prefix — **Docker Containers**, **Podman Containers** — so two lists never read as the same screen.
-- **States are asked of the data, not of the screen.** `countsRead`/`listsFailed` are set by the read itself, so the status bar, the delete dialog and the empty cells agree; the current tab's gate answers a different question and used to answer wrong. A sortable header is a focusable button with `aria-sort`; a picker row carries its full label in `title`; the settings rail keeps its labels at every width and grows with the viewport (`clamp(140px, 12vw, 240px)`, 536px of content at 900 → 1184px at 1600).
+- **States are asked of the data, not of the screen.** `countsRead`/`listsFailed` are set by the read itself, so the status bar, the delete dialog and the empty cells agree; the current tab's gate answers a different question and used to answer wrong. A sortable header is a focusable button with `aria-sort`; a picker row carries its full label in `title`.
 - **A group header names its source, never repeats its only item.** Each header carries a 10.5px/500 right-aligned hint — profile name, or `no profile` / `no machine`. **Machine** and **Kubernetes** share one **Colima** group, Kubernetes not being a peer of the engines. A kubelet container carries an accent `k8s` chip (16% tint, 10px/600) and counts on the Kubernetes row; that chip costs about 33px of the 142px name cell a single-origin list gets at 1280 (1012 − 870 fixed), so a kubelet name reads `k8s_POD_cor…`, accepted since the row's `title` carries the full name; a mixed-origin list pays the badge column out of the image column, leaving 174px.
 - Podman is scoped the way Colima is: `podman_set_machine_cmd` names the machine once and `run_podman` exports it as `CONTAINER_CONNECTION`, so lists, mutations, stats and logs talk to the same VM without a `machine` parameter. The toolbar states the machine (a `<Select>` above one machine, a sentence for one), validates it on every read, and re-reads the four lists on switch.
-- Settings: a second, full-height column beside the sidebar (`clamp(140px, 12vw, 240px)`: `--rail` surface, white in light and one step above the nav in dark; 60px top padding so its first row sits on the sidebar's first group heading rather than 21.6px above it), not a floating card and not a second nav list. It carries General, Sidebar, Configuration and About at primary nav weight (13px, 16px icon, sidebar active tint) plus the red **Delete profile** row below a `.settings-rail-sep` hairline; the page title names the section (`Settings · General`).
+- Settings is a page in the content column, not a second sidebar: one 404px segmented tab bar (`.settings-tabs`, 27px pills on `--panel-2`, selected = `--panel` with a hairline shadow and an accent icon) centered above an 860px column of panels. The window title stays **Settings**; the selected tab names the section. Destructive work is not a peer tab: **Delete `<profile>`** closes General as a warning row (28px `--red`-tinted tile, 13px heading, 12px sentence, red button), because the profile it deletes is named by the facts above it.
 
 ### Settings
 - General opens with the Colima facts (version and update state, active profile, runtime), then a **Tools on this machine** table: Utility, Status, Used for, Install. The only place every probed CLI appears at once, whatever the sidebar hides.

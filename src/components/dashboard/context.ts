@@ -5,8 +5,8 @@ import type { WidgetKey } from "./registry";
 
 export type ContainerScope = "all" | "compose" | "docker" | "k8s";
 
-/** Settings sections a card can deep-link to. Mirrors the Settings rail. */
-export type SettingsSection = "general" | "sidebar" | "configuration" | "about" | "danger";
+/** Settings sections a card can deep-link to. Mirrors the Settings tab bar. */
+export type SettingsSection = "general" | "sidebar" | "configuration" | "about";
 
 export type DashboardContext = {
   profiles: Profile[];

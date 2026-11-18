@@ -140,14 +140,19 @@ STATES: dict[str, dict] = {
 
 PAGES = ["dashboard", "containers", "images", "volumes", "networks", "activity", "sherlock",
          "cleanup", "machine", "kubernetes", "podman-machines", "podman-containers", "podman-images",
-         "podman-volumes", "podman-networks", "settings-sidebar", "settings-about"]
+         "podman-volumes", "podman-networks", "settings-general", "settings-sidebar",
+         "settings-configuration", "settings-about"]
 
 NAV_LABEL = {"dashboard": "Dashboard", "containers": "Containers", "images": "Images", "volumes": "Volumes",
              "networks": "Networks", "activity": "Activity", "sherlock": "Sherlock", "cleanup": "Cleanup",
              "machine": "Machine", "kubernetes": "Kubernetes",
              "podman-machines": "Machines", "podman-containers": "Containers", "podman-images": "Images",
              "podman-volumes": "Volumes", "podman-networks": "Networks",
-             "settings-sidebar": "Settings", "settings-about": "Settings"}
+             "settings-general": "Settings", "settings-sidebar": "Settings",
+             "settings-configuration": "Settings", "settings-about": "Settings"}
+# Settings sections live in a tab bar inside the page, not in a second sidebar column.
+SETTINGS_SECTION = {"settings-general": "General", "settings-sidebar": "Sidebar",
+                    "settings-configuration": "Configuration", "settings-about": "About"}
 
 
 def chrome_path() -> str:
@@ -290,7 +295,7 @@ REPORT_JS = r"""() => {
     .filter((e) => e.scrollWidth > e.clientWidth + 2)
     .map((e) => ({ cls: e.className, over: e.scrollWidth - e.clientWidth }));
   const rects = {};
-  for (const sel of ['.sidebar', '.settings-rail', '.topbar h1', '.table', '.page-scroll', '.statusbar', '.prereq-panel', '.nav-empty', '.logs-modal']) {
+  for (const sel of ['.sidebar', '.settings-tabs', '.topbar h1', '.table', '.page-scroll', '.statusbar', '.prereq-panel', '.nav-empty', '.logs-modal']) {
     const el = document.querySelector(sel);
     if (el) { const r = el.getBoundingClientRect(); rects[sel] = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; }
   }
@@ -338,7 +343,7 @@ REPORT_JS = r"""() => {
 
 
 def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: Path,
-        fresh: bool = False) -> list[dict]:
+        fresh: bool = False, dark: bool = False) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -356,7 +361,8 @@ def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: P
         with sync_playwright() as p:
             browser = p.chromium.launch(executable_path=chrome_path())
             for width in widths:
-                ctx = browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=2)
+                ctx = browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=2,
+                                          color_scheme="dark" if dark else "light")
                 pg = ctx.new_page()
                 pg.add_init_script(stub_js(state))
                 errors: list[str] = []
@@ -385,14 +391,11 @@ def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: P
                             if page.startswith("podman-"):
                                 pg.locator(".nav-group", has=pg.locator(".nav-group-title", has_text="Podman")) \
                                   .get_by_role("button", name=re.compile(rf"^{nav}\b")).click(timeout=2000)
-                            elif page == "settings-sidebar":
+                            elif page in SETTINGS_SECTION:
                                 pg.get_by_role("button", name=re.compile(r"^Settings\b")).first.click(timeout=2000)
-                                pg.wait_for_timeout(500)
-                                pg.locator(".settings-rail").get_by_role("button", name=re.compile(r"^Sidebar\b")).first.click(timeout=2000)
-                            elif page == "settings-about":
-                                pg.get_by_role("button", name=re.compile(r"^Settings\b")).first.click(timeout=2000)
-                                pg.wait_for_timeout(500)
-                                pg.locator(".settings-rail").get_by_role("button", name="About").first.click(timeout=2000)
+                                pg.wait_for_timeout(400)
+                                pg.locator(".settings-tabs").get_by_role(
+                                    "tab", name=re.compile(rf"^{SETTINGS_SECTION[page]}\b")).click(timeout=2000)
                             else:
                                 pg.get_by_role("button", name=re.compile(rf"^{nav}\b")).first.click(timeout=2000)
                         except Exception as exc:  # noqa: BLE001 - report, do not fail the run
@@ -425,6 +428,7 @@ def main() -> None:
     ap.add_argument("--out", default="/tmp/runtime-desk-probe")
     ap.add_argument("--pretty", action="store_true")
     ap.add_argument("--fresh", action="store_true", help="first launch: keep the onboarding modal")
+    ap.add_argument("--dark", action="store_true", help="render with prefers-color-scheme: dark")
     ap.add_argument("--gate", action="store_true",
                     help="every state, every page, widths 900/1280/1600; exit 1 on a layout regression")
     args = ap.parse_args()
@@ -464,7 +468,7 @@ def main() -> None:
     for page in pages:
         if page not in NAV_LABEL:
             raise SystemExit(f"unknown page {page}; see --list")
-    results = run(args.state, pages, widths, args.shots, Path(args.out), args.fresh)
+    results = run(args.state, pages, widths, args.shots, Path(args.out), args.fresh, args.dark)
     print(json.dumps(results, indent=2 if args.pretty else None, ensure_ascii=False))
 
 
