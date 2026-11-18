@@ -50,7 +50,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
       <section className="panel">
         <div className="section-head">
           <div>
-            <h3>Live containers</h3>
+            <h3>Live totals</h3>
             <p className="muted">Streamed from <code>docker stats</code> at about 1 Hz while the app is frontmost.</p>
           </div>
         </div>
@@ -98,7 +98,6 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
               <div className="strip-item"><span className="strip-label">Network</span><span className="strip-value">{fmtSize(netRx)}</span><span className="strip-sub">received since start · {fmtSize(netTx)} sent</span></div>
               <div className="strip-item"><span className="strip-label">Block I/O</span><span className="strip-value">{fmtSize(blockRead)}</span><span className="strip-sub">{fmtSize(blockWrite)} written · since start</span></div>
               <div className="strip-item"><span className="strip-label">PIDs</span><span className="strip-value">{totalPids}</span></div>
-              <div className="strip-item"><span className="strip-label">Containers</span><span className="strip-value">{stats.length}</span></div>
             </div>
 
             <div className="trend-grid">
@@ -121,63 +120,78 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
                 </span>
               </div>
             </div>
-
-            <div className="activity-table-wrap">
-              <table className="table activity-table">
-                <thead>
-                  <tr>
-                    <th>Container</th>
-                    <th title="CPU over the last 72 seconds, one vertical scale shared by every row">
-                      CPU history <span className="activity-scale">0–{rowCeiling.toFixed(1)}%</span>
-                    </th>
-                    <th>Memory</th>
-                    <th>Network I/O</th>
-                    <th>Block I/O</th>
-                    <th>PIDs</th>
-                    <th className="activity-actions">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stats.length === 0 && <tr><td colSpan={7} className="empty">{loading ? "Reading the first sample…" : "No running containers."}</td></tr>}
-                  {stats.map((s) => (
-                    <tr key={s.id}>
-                      <td style={{ fontWeight: 600 }} title={s.name}>{isKubernetesName(s.name) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster, not by you">k8s</span>}{s.name}</td>
-                      <td>
-                        <div className="ap-cpu">
-                          <svg className="ap-spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
-                            <line className="activity-spark-base" x1="0" y1="21.5" x2="120" y2="21.5" />
-                            <polyline points={activitySparkPoints(s.id, 120, 22, rowCeiling)} fill="none" stroke="var(--green)" strokeWidth="1.4" strokeLinejoin="round" />
-                          </svg>
-                          <span>{s.cpu.toFixed(1)}%</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className={`ap-mem${pressuredIds.has(s.id) ? " pressure" : ""}`} title={`${s.mem_pct.toFixed(0)}% of ${fmtBytes(s.mem_limit)}${pressuredIds.has(s.id) ? " — Docker OOM-kills at 100%" : ""}`}>
-                          <span className="ap-mem-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, s.mem_pct)}%` }} /></span>
-                          <span>{fmtBytes(s.mem)}{s.mem_limit ? <span className="muted"> / {fmtBytes(s.mem_limit)}</span> : null}</span>
-                        </div>
-                      </td>
-                      <td className="muted">↓ {fmtSize(s.net_rx)} · ↑ {fmtSize(s.net_tx)}</td>
-                      <td className="muted">{fmtSize(s.block_read)} / {fmtSize(s.block_write)}</td>
-                      <td className="muted">{s.pids}</td>
-                      <td className="activity-actions">
-                        <button
-                          className="icon-btn"
-                          aria-label={`Open ${s.name} in Sherlock`}
-                          title="Open in Sherlock"
-                          onClick={() => onInvestigate(s.id)}
-                        >
-                          <FingerprintIcon size={15} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </>
         )}
       </section>
+
+      {toolOk && profileRunning && !snap.error && (
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <h3>Containers</h3>
+              <p className="muted">
+                {loading
+                  ? "Waiting for the first sample."
+                  : `${stats.length} running · sorted by CPU; every sparkline shares one scale.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="activity-table-wrap">
+            <table className="table activity-table">
+              <thead>
+                <tr>
+                  <th>Container</th>
+                  <th title="CPU over the last 72 seconds, one vertical scale shared by every row">
+                    CPU history <span className="activity-scale">0–{rowCeiling.toFixed(1)}%</span>
+                  </th>
+                  <th>Memory</th>
+                  <th>Network I/O</th>
+                  <th>Block I/O</th>
+                  <th>PIDs</th>
+                  <th className="activity-actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.length === 0 && <tr><td colSpan={7} className="empty">{loading ? "Reading the first sample…" : "No running containers."}</td></tr>}
+                {stats.map((s) => (
+                  <tr key={s.id}>
+                    <td style={{ fontWeight: 600 }} title={s.name}>{isKubernetesName(s.name) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster, not by you">k8s</span>}{s.name}</td>
+                    <td>
+                      <div className="ap-cpu">
+                        <svg className="ap-spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
+                          <line className="activity-spark-base" x1="0" y1="21.5" x2="120" y2="21.5" />
+                          <polyline points={activitySparkPoints(s.id, 120, 22, rowCeiling)} fill="none" stroke="var(--green)" strokeWidth="1.4" strokeLinejoin="round" />
+                        </svg>
+                        <span>{s.cpu.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className={`ap-mem${pressuredIds.has(s.id) ? " pressure" : ""}`} title={`${s.mem_pct.toFixed(0)}% of ${fmtBytes(s.mem_limit)}${pressuredIds.has(s.id) ? " — Docker OOM-kills at 100%" : ""}`}>
+                        <span className="ap-mem-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, s.mem_pct)}%` }} /></span>
+                        <span>{fmtBytes(s.mem)}{s.mem_limit ? <span className="muted"> / {fmtBytes(s.mem_limit)}</span> : null}</span>
+                      </div>
+                    </td>
+                    <td className="muted">↓ {fmtSize(s.net_rx)} · ↑ {fmtSize(s.net_tx)}</td>
+                    <td className="muted">{fmtSize(s.block_read)} / {fmtSize(s.block_write)}</td>
+                    <td className="muted">{s.pids}</td>
+                    <td className="activity-actions">
+                      <button
+                        className="icon-btn"
+                        aria-label={`Open ${s.name} in Sherlock`}
+                        title="Open in Sherlock"
+                        onClick={() => onInvestigate(s.id)}
+                      >
+                        <FingerprintIcon size={15} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
