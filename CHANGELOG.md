@@ -6,10 +6,12 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-18
+
 ### Added
 
-- **Each Activity row opens its container in Sherlock.** The live table gained an Actions column with the Sherlock fingerprint icon, so the page that shows a container's CPU, memory and network also hands that container to the page that shows everything attached to it.
-- **Sherlock can investigate a Compose project as one entity.** A group page lists every container in the project with live CPU, memory and network, shows three stacked charts whose bands are the containers (top eight, the rest summed into **Other**), and carries the same tags and published ports as any other subject. Open it from the Sherlock picker's **Groups** filter, or from a container's **Compose** project link.
+- **A Compose project is now one page in Sherlock.** A project shows its containers' live CPU, memory and network as stacked charts, alongside tags and published ports — open it from the picker's **Groups** filter or from a container's Compose link.
+- **Every Activity row opens its container in Sherlock.** A fingerprint icon in the new Actions column hands that container to the page that shows everything attached to it.
 
 ## 1.2.1 — 2026-11-18
 
