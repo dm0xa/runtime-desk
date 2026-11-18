@@ -6,7 +6,7 @@
 - **Backend**: Rust, exposed to the frontend as 94 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
-A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and window geometry from the window-state plugin. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 3 seconds, disk totals and per-volume sizes 60.
+A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 3 seconds, disk totals and per-volume sizes 60.
 
 ## Backend
 
@@ -19,7 +19,7 @@ Assembly point; `main.rs` only calls `run()`.
 - `ServeState` (`Mutex<HashMap<profile, pid>>`) tracks AI model servers, mirrored to `<colima home>/runtime-desk-serve.json` on every change because a server outlives the window; entries whose PID `kill -0` rejects are dropped on load, so a crashed run cannot offer a "running" server that Stop then fails to kill.
 - `EventStream` is a `Mutex<Option<Child>>` for the live `docker events` child: starting a stream kills the previous one, so a profile switch cannot leave a reader on the old daemon; its thread ends at stdout EOF.
 - `StatsStream` is the same shape for Sherlock's `docker stats <id>`: one JSON sample per second, then `__stats_end__` when stdout closes, so the panel falls back to polling instead of freezing on the last number.
-- `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener and window-state plugins, installs the menu from `menu::build` with `menu::dispatch`, manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
+- `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
 
 Command groups (94 total):
 
@@ -396,7 +396,7 @@ Invariants worth preserving:
 
 ## Tradeoffs and limitations
 
-- **macOS conventions.** `open_url_cmd` uses `open`, AI chat AppleScript and Terminal.app, the Colima binary falls back to `/opt/homebrew/bin`, the menu bar is native, and the window-state plugin restores size and position, pulling a frame no monitor fully holds into the nearest work area. No other platform is supported yet.
+- **macOS conventions.** `open_url_cmd` uses `open`, AI chat AppleScript and Terminal.app, the Colima binary falls back to `/opt/homebrew/bin`, the menu bar is native, and the remembered window frame is reapplied on launch, pulling a frame no monitor fully holds into the nearest work area. No other platform is supported yet.
 - **No TTY.** The app cannot host an interactive shell or container exec session; AI chat delegates to Terminal.app, and a real terminal pane is a separate project.
 - **Polling where streaming is not trustworthy.** Docker lists refresh every 15 seconds while the window is visible, or every 60 with `docker events` connected; the activity sampler holds one `docker stats` child that streams every container at about 1 Hz (accounting once a second; a `docker stats --no-stream` poll every 2 s is the fallback when the stream is refused or ends); Sherlock streams `docker stats` at 1 Hz, falling back to a 5-second `podman stats --no-stream` poll. Every sampler stops while the window is hidden, and the 60-second disk cache can lag a minute unless a prune or removal clears it.
 - **Aggregate disk totals.** `docker system df` totals are one cached walk that cannot be split per object; per-volume sizes and link counts come from the same `system df -v` payload, and per-image "unique" bytes exist only on Cleanup, where rows deduplicate by image ID. A layer breakdown needs `docker image history`, read on demand by Image detail.

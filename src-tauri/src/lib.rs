@@ -625,37 +625,150 @@ async fn k8s_cluster_action_cmd(profile: String, action: String) -> R<String> {
     Ok(done)
 }
 
+/// A rectangle in global screen points, the space macOS places windows in.
+///
+/// Tauri hands back a monitor's origin and size in that monitor's own physical pixels,
+/// so on a mixed setup — a 2× laptop panel beside a 1× external display — the numbers
+/// are not comparable and a clamp computed from them lands off every screen. Dividing
+/// each rectangle by its own monitor's scale factor puts all of them in one space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScreenRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl ScreenRect {
+    fn from_physical(rect: tauri::PhysicalRect<i32, u32>, scale: f64) -> Self {
+        debug_assert!(scale > 0.0);
+        Self {
+            x: rect.position.x as f64 / scale,
+            y: rect.position.y as f64 / scale,
+            width: rect.size.width as f64 / scale,
+            height: rect.size.height as f64 / scale,
+        }
+    }
+
+    fn right(&self) -> f64 {
+        self.x + self.width
+    }
+
+    fn bottom(&self) -> f64 {
+        self.y + self.height
+    }
+
+    fn overlap_area(&self, other: &Self) -> f64 {
+        let width = self.right().min(other.right()) - self.x.max(other.x);
+        let height = self.bottom().min(other.bottom()) - self.y.max(other.y);
+        if width > 0.0 && height > 0.0 {
+            width * height
+        } else {
+            0.0
+        }
+    }
+}
+
 struct WindowFit {
-    size: tauri::PhysicalSize<u32>,
-    position: tauri::PhysicalPosition<i32>,
+    size: (f64, f64),
+    position: (f64, f64),
+}
+
+/// The window frame remembered between launches, in global screen points.
+///
+/// Points, not physical pixels: a frame saved on a 2× laptop panel and re-applied on a
+/// 1× external display would otherwise come back at half size, and vice versa. Points
+/// mean the same thing on every screen, which is also why the fit below works in them.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+struct WindowGeometry {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    maximized: bool,
+}
+
+fn window_geometry_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("window.json"))
+}
+
+fn read_window_geometry(app: &tauri::AppHandle) -> Option<WindowGeometry> {
+    let raw = std::fs::read_to_string(window_geometry_path(app)?).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// The frame as it should be remembered, from the window's physical pixels.
+fn geometry_from_frame(
+    inner: (u32, u32),
+    outer: (i32, i32),
+    scale: f64,
+    maximized: bool,
+) -> WindowGeometry {
+    WindowGeometry {
+        x: outer.0 as f64 / scale,
+        y: outer.1 as f64 / scale,
+        width: inner.0 as f64 / scale,
+        height: inner.1 as f64 / scale,
+        maximized,
+    }
+}
+
+/// Remember the window's current frame. A maximized frame says nothing about where the
+/// window should return to once it is unmaximized, so its frame is left as it was.
+fn save_window_geometry(app: &tauri::AppHandle) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    let Some(path) = window_geometry_path(app) else { return };
+    let maximized = win.is_maximized().unwrap_or(false);
+    let remembered = read_window_geometry(app);
+    let geometry = if maximized {
+        match remembered {
+            Some(mut geometry) => {
+                geometry.maximized = true;
+                geometry
+            }
+            None => WindowGeometry { x: 0.0, y: 0.0, width: 1300.0, height: 820.0, maximized: true },
+        }
+    } else {
+        let (Ok(scale), Ok(inner), Ok(position)) =
+            (win.scale_factor(), win.inner_size(), win.outer_position())
+        else {
+            return;
+        };
+        geometry_from_frame(
+            (inner.width, inner.height),
+            (position.x, position.y),
+            scale,
+            false,
+        )
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(&geometry) {
+        let _ = std::fs::write(path, json);
+    }
 }
 
 /// The largest inner size and on-screen origin that keep the whole window frame inside
-/// `area`, or `None` when the geometry already fits.
-///
-/// All values are physical pixels, so a monitor with a different scale factor is
-/// handled by passing that monitor's own work area.
+/// `area`, or `None` when the geometry already fits. Every value is in screen points.
 fn fit_to_work_area(
-    inner: tauri::PhysicalSize<u32>,
-    frame: (u32, u32),
-    position: tauri::PhysicalPosition<i32>,
-    area: &tauri::PhysicalRect<i32, u32>,
+    inner: (f64, f64),
+    frame: (f64, f64),
+    position: (f64, f64),
+    area: &ScreenRect,
 ) -> Option<WindowFit> {
     let (frame_w, frame_h) = frame;
-    let outer_w = inner.width.saturating_add(frame_w).min(area.size.width);
-    let outer_h = inner.height.saturating_add(frame_h).min(area.size.height);
-    let max_x = area.position.x + (area.size.width - outer_w) as i32;
-    let max_y = area.position.y + (area.size.height - outer_h) as i32;
-    let x = position.x.clamp(area.position.x, max_x);
-    let y = position.y.clamp(area.position.y, max_y);
-    let size = tauri::PhysicalSize::new(
-        outer_w.saturating_sub(frame_w),
-        outer_h.saturating_sub(frame_h),
-    );
-    if size == inner && x == position.x && y == position.y {
+    let outer_w = (inner.0 + frame_w).min(area.width);
+    let outer_h = (inner.1 + frame_h).min(area.height);
+    let max_x = area.x + (area.width - outer_w);
+    let max_y = area.y + (area.height - outer_h);
+    let x = position.0.clamp(area.x, max_x);
+    let y = position.1.clamp(area.y, max_y);
+    let size = ((outer_w - frame_w).max(0.0), (outer_h - frame_h).max(0.0));
+    if size == inner && x == position.0 && y == position.1 {
         return None;
     }
-    Some(WindowFit { size, position: tauri::PhysicalPosition::new(x, y) })
+    Some(WindowFit { size, position: (x, y) })
 }
 
 /// Whether a window frame sits entirely inside a monitor's work area.
@@ -664,39 +777,104 @@ fn fit_to_work_area(
 /// display while the pointer is on a display to its left would otherwise be dragged to
 /// that display by the clamp. Ask every monitor instead, and leave the window alone when
 /// one of them already holds it.
-fn fits_inside(
-    area: &tauri::PhysicalRect<i32, u32>,
-    rect: &tauri::PhysicalRect<i32, u32>,
-) -> bool {
-    let right = rect.position.x.saturating_add(rect.size.width as i32);
-    let bottom = rect.position.y.saturating_add(rect.size.height as i32);
-    rect.position.x >= area.position.x
-        && rect.position.y >= area.position.y
-        && right <= area.position.x.saturating_add(area.size.width as i32)
-        && bottom <= area.position.y.saturating_add(area.size.height as i32)
+fn fits_inside(area: &ScreenRect, rect: &ScreenRect) -> bool {
+    rect.x >= area.x
+        && rect.y >= area.y
+        && rect.right() <= area.right()
+        && rect.bottom() <= area.bottom()
 }
 
 /// The work area of the monitor a frame overlaps most, for the case where it fits on
 /// none of them (a window restored from a display that is now gone).
 fn best_work_area<'a>(
-    areas: impl Iterator<Item = &'a tauri::PhysicalRect<i32, u32>>,
-    rect: &tauri::PhysicalRect<i32, u32>,
-) -> Option<tauri::PhysicalRect<i32, u32>> {
-    let right = rect.position.x.saturating_add(rect.size.width as i32);
-    let bottom = rect.position.y.saturating_add(rect.size.height as i32);
+    areas: impl Iterator<Item = &'a ScreenRect>,
+    rect: &ScreenRect,
+) -> Option<ScreenRect> {
     areas
-        .map(|area| {
-            let overlap_w = (right.min(area.position.x.saturating_add(area.size.width as i32))
-                - rect.position.x.max(area.position.x))
-            .max(0) as u64;
-            let overlap_h = (bottom.min(area.position.y.saturating_add(area.size.height as i32))
-                - rect.position.y.max(area.position.y))
-            .max(0) as u64;
-            (overlap_w * overlap_h, *area)
-        })
-        .max_by_key(|(area_px, _)| *area_px)
-        .filter(|(area_px, _)| *area_px > 0)
+        .map(|area| (rect.overlap_area(area), *area))
+        .filter(|(overlap, _)| *overlap > 0.0)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, area)| area)
+}
+
+/// Put the launch window at its remembered frame, then keep it on a monitor.
+///
+/// Every frame change Tauri issues is queued to the event loop, so a read in the same turn
+/// still sees the old frame and the launch window cannot be fitted where the restore is
+/// requested. The placement therefore runs once more a turn later, against the frame that
+/// actually landed.
+fn restore_main_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        match read_window_geometry(&app) {
+            Some(geometry) if geometry.maximized => {
+                let _ = win.maximize();
+            }
+            Some(geometry) => {
+                let _ = win.set_size(tauri::LogicalSize::new(geometry.width, geometry.height));
+                let _ = win.set_position(tauri::LogicalPosition::new(geometry.x, geometry.y));
+            }
+            None => {}
+        }
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(win) = handle.get_webview_window("main") {
+                keep_on_screen(&win);
+            }
+        });
+    });
+}
+
+/// Pull the window frame back into a monitor's work area.
+///
+/// macOS keeps a window created larger than the display at that size, so on smaller
+/// screens the configured geometry hangs off the right/bottom edge. Only a frame that no
+/// monitor fully holds is moved: the cursor's monitor is not evidence about where the
+/// window belongs. Every failure here is cosmetic, so none of it may refuse the launch.
+fn keep_on_screen(win: &tauri::WebviewWindow) {
+    let _ = (|| -> Option<()> {
+        // A maximized frame is the window server's to place.
+        if win.is_maximized().unwrap_or(false) {
+            return Some(());
+        }
+        let scale = win.scale_factor().ok()?;
+        let inner = win.inner_size().ok()?;
+        let outer = win.outer_size().ok()?;
+        let position = win.outer_position().ok()?;
+        let rect = ScreenRect::from_physical(tauri::PhysicalRect { position, size: outer }, scale);
+        let areas: Vec<ScreenRect> = win
+            .available_monitors()
+            .ok()?
+            .iter()
+            .map(|m| ScreenRect::from_physical(*m.work_area(), m.scale_factor()))
+            .collect();
+        if areas.iter().any(|area| fits_inside(area, &rect)) {
+            return Some(());
+        }
+        let area = best_work_area(areas.iter(), &rect)
+            .or_else(|| {
+                win.primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| ScreenRect::from_physical(*m.work_area(), m.scale_factor()))
+            })
+            .or_else(|| areas.first().copied())?;
+        let frame = (
+            (outer.width as f64 - inner.width as f64) / scale,
+            (outer.height as f64 - inner.height as f64) / scale,
+        );
+        let fit = fit_to_work_area(
+            (inner.width as f64 / scale, inner.height as f64 / scale),
+            frame,
+            (rect.x, rect.y),
+            &area,
+        )?;
+        win.set_size(tauri::LogicalSize::new(fit.size.0, fit.size.1)).ok()?;
+        win.set_position(tauri::LogicalPosition::new(fit.position.0, fit.position.1))
+            .ok()
+    })();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -708,40 +886,12 @@ pub fn run() {
         .manage(StatsStream(Mutex::new(None)))
         .manage(ActivityStream(Mutex::new(None)))
         .plugin(tauri_plugin_opener::init())
-        // Size, position and maximized state survive a relaunch, the way every Mac
-        // window does; the work-area fit below still pulls an off-screen frame back.
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .menu(menu::build)
         .on_menu_event(|app, event| menu::dispatch(app, event.id().as_ref()))
         .setup(|app| {
             // Warm the first read the window makes, while it is still loading the bundle.
             std::thread::spawn(colima::prefetch_profiles);
-            // macOS keeps a window created larger than the display at that size, so on
-            // smaller screens the configured geometry hangs off the right/bottom edge.
-            // Only a frame that no monitor fully holds is moved: the cursor's monitor is
-            // not evidence about where the window belongs. Every failure here is cosmetic,
-            // so none of it may refuse the launch.
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = (|| -> Option<()> {
-                    let inner = win.inner_size().ok()?;
-                    let outer = win.outer_size().ok()?;
-                    let position = win.outer_position().ok()?;
-                    let rect = tauri::PhysicalRect { position, size: outer };
-                    let areas: Vec<_> = win.available_monitors().ok()?.iter().map(|m| *m.work_area()).collect();
-                    if areas.iter().any(|area| fits_inside(area, &rect)) {
-                        return Some(());
-                    }
-                    let area = best_work_area(areas.iter(), &rect)
-                        .or_else(|| win.primary_monitor().ok().flatten().map(|m| *m.work_area()))?;
-                    let frame = (
-                        outer.width.saturating_sub(inner.width),
-                        outer.height.saturating_sub(inner.height),
-                    );
-                    let fit = fit_to_work_area(inner, frame, position, &area)?;
-                    win.set_size(fit.size).ok()?;
-                    win.set_position(fit.position).ok()
-                })();
-            }
+            restore_main_window(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -764,6 +914,7 @@ pub fn run() {
         .run(|app, event| {
             // The reader threads and their children outlive the window unless killed here.
             if matches!(event, tauri::RunEvent::Exit) {
+                save_window_geometry(app);
                 kill_event_stream(app.state::<EventStream>().inner());
                 kill_stats_stream(app.state::<StatsStream>().inner());
                 kill_activity_stream(app.state::<ActivityStream>().inner());
@@ -799,105 +950,115 @@ mod tests {
 
     #[test]
     fn fit_leaves_a_window_that_already_fits_alone() {
-        let area = tauri::PhysicalRect {
-            position: tauri::PhysicalPosition::new(0, 25),
-            size: tauri::PhysicalSize::new(1728, 1055),
-        };
-        let fit = fit_to_work_area(
-            tauri::PhysicalSize::new(1300, 820),
-            (0, 28),
-            tauri::PhysicalPosition::new(200, 100),
-            &area,
-        );
+        let area = rect(0.0, 25.0, 1728.0, 1055.0);
+        let fit = fit_to_work_area((1300.0, 820.0), (0.0, 28.0), (200.0, 100.0), &area);
         assert!(fit.is_none());
     }
 
     #[test]
     fn fit_shrinks_the_frame_to_the_work_area() {
-        // 1280x800 display, 25px menu bar: a 1300x820 inner size plus the titlebar overflows.
-        let area = tauri::PhysicalRect {
-            position: tauri::PhysicalPosition::new(0, 25),
-            size: tauri::PhysicalSize::new(1280, 775),
-        };
-        let fit = fit_to_work_area(
-            tauri::PhysicalSize::new(1300, 820),
-            (0, 28),
-            tauri::PhysicalPosition::new(0, 25),
-            &area,
-        )
-        .expect("window larger than the display must be fitted");
-        assert_eq!(fit.size, tauri::PhysicalSize::new(1280, 747));
-        assert_eq!(fit.position, tauri::PhysicalPosition::new(0, 25));
+        // 1280x800 display, 25pt menu bar: a 1300x820 inner size plus the titlebar overflows.
+        let area = rect(0.0, 25.0, 1280.0, 775.0);
+        let fit = fit_to_work_area((1300.0, 820.0), (0.0, 28.0), (0.0, 25.0), &area)
+            .expect("window larger than the display must be fitted");
+        assert_eq!(fit.size, (1280.0, 747.0));
+        assert_eq!(fit.position, (0.0, 25.0));
     }
 
     #[test]
     fn fit_pulls_an_off_screen_origin_back() {
-        let area = tauri::PhysicalRect {
-            position: tauri::PhysicalPosition::new(0, 25),
-            size: tauri::PhysicalSize::new(1280, 775),
-        };
-        let fit = fit_to_work_area(
-            tauri::PhysicalSize::new(900, 600),
-            (0, 28),
-            tauri::PhysicalPosition::new(-300, 900),
-            &area,
-        )
-        .expect("origin outside the display must be clamped");
-        assert_eq!(fit.size, tauri::PhysicalSize::new(900, 600));
-        assert_eq!(fit.position, tauri::PhysicalPosition::new(0, 172));
+        let area = rect(0.0, 25.0, 1280.0, 775.0);
+        let fit = fit_to_work_area((900.0, 600.0), (0.0, 28.0), (-300.0, 900.0), &area)
+            .expect("origin outside the display must be clamped");
+        assert_eq!(fit.size, (900.0, 600.0));
+        assert_eq!(fit.position, (0.0, 172.0));
     }
 
     #[test]
     fn fit_never_underflows_on_a_tiny_work_area() {
-        let area = tauri::PhysicalRect {
-            position: tauri::PhysicalPosition::new(0, 0),
-            size: tauri::PhysicalSize::new(20, 20),
-        };
-        let fit = fit_to_work_area(
-            tauri::PhysicalSize::new(1300, 820),
-            (0, 28),
-            tauri::PhysicalPosition::new(0, 0),
-            &area,
-        )
-        .expect("window larger than the display must be fitted");
-        assert_eq!(fit.size, tauri::PhysicalSize::new(20, 0));
-        assert_eq!(fit.position, tauri::PhysicalPosition::new(0, 0));
+        let area = rect(0.0, 0.0, 20.0, 20.0);
+        let fit = fit_to_work_area((1300.0, 820.0), (0.0, 28.0), (0.0, 0.0), &area)
+            .expect("window larger than the display must be fitted");
+        assert_eq!(fit.size, (20.0, 0.0));
+        assert_eq!(fit.position, (0.0, 0.0));
     }
 
-    fn area(x: i32, y: i32, w: u32, h: u32) -> tauri::PhysicalRect<i32, u32> {
-        tauri::PhysicalRect {
-            position: tauri::PhysicalPosition::new(x, y),
-            size: tauri::PhysicalSize::new(w, h),
-        }
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> super::ScreenRect {
+        super::ScreenRect { x, y, width, height }
+    }
+
+    /// The monitor numbers Tauri reports come straight from each screen's own backing
+    /// scale, so a 2x panel and a 1x display describe the same desktop in different
+    /// units; only the per-screen division puts them in one space.
+    #[test]
+    fn monitors_normalise_to_one_point_space() {
+        let laptop = super::ScreenRect::from_physical(
+            tauri::PhysicalRect {
+                position: tauri::PhysicalPosition::new(0, 66),
+                size: tauri::PhysicalSize::new(3456, 2168),
+            },
+            2.0,
+        );
+        assert_eq!(laptop, rect(0.0, 33.0, 1728.0, 1084.0));
+        let external = super::ScreenRect::from_physical(
+            tauri::PhysicalRect {
+                position: tauri::PhysicalPosition::new(1728, -293),
+                size: tauri::PhysicalSize::new(2560, 1410),
+            },
+            1.0,
+        );
+        assert_eq!(external, rect(1728.0, -293.0, 2560.0, 1410.0));
+        // The external display starts exactly where the laptop ends.
+        assert_eq!(laptop.right(), external.x);
+    }
+
+    /// The remembered frame must survive a screen with a different backing scale, so it
+    /// is stored in points: the same window reports 2600x1640 physical pixels on a 2x
+    /// panel and 1300x820 on a 1x display, and both must be remembered as 1300x820.
+    #[test]
+    fn geometry_is_remembered_in_points() {
+        let laptop = super::geometry_from_frame((2600, 1640), (428, 198), 2.0, false);
+        let external = super::geometry_from_frame((1300, 820), (214, 99), 1.0, false);
+        assert_eq!(
+            laptop,
+            super::WindowGeometry {
+                x: 214.0,
+                y: 99.0,
+                width: 1300.0,
+                height: 820.0,
+                maximized: false,
+            }
+        );
+        assert_eq!(laptop, external);
     }
 
     #[test]
     fn a_window_on_any_monitor_is_never_moved() {
         // Main display; a second display to its left with nothing on it yet.
-        let main = area(0, 25, 1728, 1055);
-        let left = area(-2200, 0, 2200, 1100);
-        let rect = area(214, 99, 1300, 820);
-        assert!(fits_inside(&main, &rect));
-        assert!(!fits_inside(&left, &rect));
+        let main = rect(0.0, 25.0, 1728.0, 1055.0);
+        let left = rect(-2200.0, 0.0, 2200.0, 1100.0);
+        let window = rect(214.0, 99.0, 1300.0, 820.0);
+        assert!(fits_inside(&main, &window));
+        assert!(!fits_inside(&left, &window));
         // The left display must not become the target just because the cursor is there.
         let areas = [left, main];
-        assert!(areas.iter().any(|a| fits_inside(a, &rect)));
+        assert!(areas.iter().any(|a| fits_inside(a, &window)));
     }
 
     #[test]
     fn a_window_straddling_the_edge_is_fitted_into_the_monitor_it_mostly_covers() {
-        let main = area(0, 25, 1728, 1055);
-        let left = area(-2200, 0, 2200, 1100);
-        let rect = area(-700, 200, 1300, 820);
-        assert!(!fits_inside(&main, &rect) && !fits_inside(&left, &rect));
-        let target = best_work_area([&main, &left].into_iter(), &rect).expect("one overlaps");
-        assert_eq!(target.position.x, -2200);
+        let main = rect(0.0, 25.0, 1728.0, 1055.0);
+        let left = rect(-2200.0, 0.0, 2200.0, 1100.0);
+        let window = rect(-700.0, 200.0, 1300.0, 820.0);
+        assert!(!fits_inside(&main, &window) && !fits_inside(&left, &window));
+        let target = best_work_area([&main, &left].into_iter(), &window).expect("one overlaps");
+        assert_eq!(target.x, -2200.0);
     }
 
     #[test]
     fn a_window_off_every_monitor_has_no_overlap_target() {
-        let main = area(0, 25, 1728, 1055);
-        let rect = area(9000, 9000, 1300, 820);
-        assert!(best_work_area([&main].into_iter(), &rect).is_none());
+        let main = rect(0.0, 25.0, 1728.0, 1055.0);
+        let window = rect(9000.0, 9000.0, 1300.0, 820.0);
+        assert!(best_work_area([&main].into_iter(), &window).is_none());
     }
 }

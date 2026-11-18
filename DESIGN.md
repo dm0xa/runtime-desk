@@ -268,7 +268,7 @@ Two themes, one accent. Light default; dark is the GitHub-dark console.
 
 **Window chrome.** `.titleBarStyle: Overlay`, hidden title, webview owns the frame. Traffic lights over the sidebar, which reserves a 38px `.sidebar-grip` for them and for dragging; content column opens with a 52px unified toolbar doubling as the drag region (`data-tauri-drag-region`, `core:window:allow-start-dragging`). Native menu bar carries ⌘N, ⌘R, ⌘F, ⌘, and full screen, each forwarded as one `menu` event.
 
-**The window remembers itself.** `tauri-plugin-window-state` restores size, position, maximized state on launch (work-area fit pulls an off-screen frame back); last screen and sidebar visibility in `localStorage` on change. View → **Show Sidebar** (⌘⌥S) hides nav and settings rail together, persisting.
+**The window remembers itself.** `window.json` in the app config dir keeps the frame in screen points — size, position, maximized — and a launch applies it to a window created hidden, with a work-area fit pulling back a frame no monitor holds; last screen and sidebar visibility in `localStorage` on change. View → **Show Sidebar** (⌘⌥S) hides nav and settings rail together, persisting.
 
 - Fixed 224px sidebar, flexible content column, 1300×820 window (minimum 900×600); Settings adds a second column (`clamp(140px, 12vw, 240px)`) beside the nav.
 - 8px rhythm: 20px page gutter, 14px under the toolbar, 16px card/panel inset, 12px between panels in a column, 14px between stacked list cards.

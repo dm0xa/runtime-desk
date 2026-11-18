@@ -6,6 +6,12 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.2.1 — 2026-11-18
+
+### Fixed
+
+- **The window opens where you left it.** Size, position and maximized state are remembered again, in screen points in `window.json` instead of the window-state plugin's physical pixels, so a frame saved on the laptop no longer comes back at half size on an external display — and one remembered from a display that is gone is pulled back onto a display that is present.
+
 ## 1.2.0 — 2026-11-18
 
 ### Changed
