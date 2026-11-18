@@ -6,6 +6,7 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+- **A mount reads as a path, not a wrapped sentence.** Related › Mounts gives each row two lines — the host path or volume name, then `→ destination · kind` indented underneath — and a long host path now breaks after its `/` separators instead of mid-word beside the destination.
 ## 1.3.0 — 2026-11-18
 
 ### Added

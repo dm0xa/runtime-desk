@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Container,
@@ -95,6 +95,13 @@ const windowLabel = (n: number, spanSeconds: number) =>
 const collecting = (n: number, stepSeconds: number) =>
   `collecting · chart in ${Math.round(Math.max(0, TREND_MIN_POINTS - n) * stepSeconds)} s`;
 const maskable = (k: string) => SECRET_KEY.test(k);
+
+/** Host paths have no spaces, so a long one wraps mid-word. Allow a break after each separator. */
+function pathWithBreaks(path: string): ReactNode {
+  const parts = path.split("/");
+  return parts.map((part, i) => (i === 0 ? <Fragment key={i}>{part}</Fragment>
+    : <Fragment key={i}><wbr />/{part}</Fragment>));
+}
 
 /** Docker's ps port string from structured bindings, so PortChips can open the URL. */
 function portString(ports: ContainerPort[]): string {
@@ -1008,13 +1015,18 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
               </div>
               <div className="inv-group">
                 <div className="inv-group-title">Mounts</div>
-                {cDetail?.mounts?.length ? cDetail.mounts.map((m) => (
-                  m.kind === "volume" && volumes.some((v) => v.name === m.source)
-                    ? <button key={m.destination} className="inv-link" onClick={() => onNavigate({ kind: "volume", id: m.source })}>
-                        {m.source}<span className="muted"> → {m.destination} ({m.mode || "rw"})</span>
-                      </button>
-                    : <div key={m.destination} className="inv-row"><code>{m.source}</code><span className="muted">→ {m.destination} · {m.kind}</span></div>
-                )) : <span className="muted">none</span>}
+                {cDetail?.mounts?.length ? cDetail.mounts.map((m) => {
+                  const linked = m.kind === "volume" && volumes.some((v) => v.name === m.source);
+                  const body = (
+                    <>
+                      <code>{pathWithBreaks(m.source || "(anonymous)")}</code>
+                      <span className="muted">→ {m.destination} · {m.kind === "volume" ? (m.mode || "rw") : m.kind}</span>
+                    </>
+                  );
+                  return linked
+                    ? <button key={`${m.source}-${m.destination}`} className="inv-link inv-mount" onClick={() => onNavigate({ kind: "volume", id: m.source })}>{body}</button>
+                    : <div key={`${m.source}-${m.destination}`} className="inv-row inv-mount">{body}</div>;
+                }) : <span className="muted">none</span>}
               </div>
               {(container.compose_project || labelValue("com.docker.compose.service")) && (
                 <div className="inv-group">
