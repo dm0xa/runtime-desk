@@ -6,6 +6,10 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Changed
+
+- **A container's Labels panel now says where each label came from.** Docker merges the image's labels into the container's `Config.Labels`, so Sherlock reads the image's own set and splits the panel into **Set at runtime** and **From image**; when that image is gone the list stays flat and says **image labels unavailable**.
+
 ## 1.1.5 — 2026-11-17
 
 ### Fixed

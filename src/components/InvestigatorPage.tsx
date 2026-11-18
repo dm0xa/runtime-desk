@@ -101,8 +101,8 @@ function portString(ports: ContainerPort[]): string {
     .join(", ");
 }
 
-/** Everything Docker knows about an env/label set, with secret-looking values masked. */
-function KeyValuePanel({ title, pairs, note, limit = 12, single = false }: { title: string; pairs: [string, string][]; note?: string; limit?: number; single?: boolean }) {
+/** Everything Docker knows about an env set, with secret-looking values masked. */
+function KeyValuePanel({ title, pairs, note, limit = 12 }: { title: string; pairs: [string, string][]; note?: string; limit?: number }) {
   const [reveal, setReveal] = useState(false);
   const [expanded, setExpanded] = useState(false);
   if (pairs.length === 0) return null;
@@ -119,7 +119,7 @@ function KeyValuePanel({ title, pairs, note, limit = 12, single = false }: { tit
           </button>
         )}
       </div>
-      <div className={`inv-pairs${single ? " one" : ""}`}>
+      <div className="inv-pairs">
         {shown.map(([k, v]) => {
           const masked = maskable(k) && !reveal;
           return (
@@ -133,6 +133,60 @@ function KeyValuePanel({ title, pairs, note, limit = 12, single = false }: { tit
       {pairs.length > limit && (
         <button className="btn inv-more" onClick={() => setExpanded((e) => !e)}>
           {expanded ? "Show less" : `Show all ${pairs.length}`}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** One origin's worth of labels: what the image declared, or what was attached at creation. */
+type LabelGroup = { title: string; pairs: [string, string][] };
+
+/** Labels grouped by where they were set. Docker hands a container one merged
+ *  `Config.Labels`, so the split only appears once the image's own set is known. */
+function LabelsPanel({ groups, note, limit = 10 }: { groups: LabelGroup[]; note?: string; limit?: number }) {
+  const [reveal, setReveal] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const present = groups.filter((g) => g.pairs.length > 0);
+  const total = present.reduce((n, g) => n + g.pairs.length, 0);
+  if (total === 0) return null;
+  const hidden = present.reduce((n, g) => n + g.pairs.filter(([k]) => maskable(k)).length, 0);
+  // One budget across groups, so the first ten rows are the same ten a flat list showed.
+  let budget = expanded ? Infinity : limit;
+  return (
+    <section className="panel inv-wide">
+      <div className="inv-panel-head">
+        <h3>Labels <span className="inv-count">{total}</span></h3>
+        {note && <span className="muted inv-note">{note}</span>}
+        {hidden > 0 && (
+          <button className="btn" onClick={() => setReveal((r) => !r)}>
+            {reveal ? "Hide secrets" : `Show ${hidden} secret${hidden === 1 ? "" : "s"}`}
+          </button>
+        )}
+      </div>
+      {present.map((group) => {
+        if (budget <= 0) return null;
+        const rows = expanded ? group.pairs : group.pairs.slice(0, budget);
+        budget -= rows.length;
+        return (
+          <div className="inv-label-group" key={group.title}>
+            {groups.length > 1 && (
+              <div className="inv-sub-label">{group.title}<span className="inv-count">{group.pairs.length}</span></div>
+            )}
+            <div className="inv-pairs one">
+              {rows.map(([k, v]) => (
+                <div className="inv-pair" key={k}>
+                  <code className="inv-pair-key">{k}</code>
+                  <code className="inv-pair-value">{maskable(k) && !reveal ? "••••••••" : v || "—"}</code>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {total > limit && (
+        <button className="btn inv-more" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? "Show less" : `Show all ${total}`}
         </button>
       )}
     </section>
@@ -259,6 +313,10 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   const [logs, setLogs] = useState<string | null>(null);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [logsNonce, setLogsNonce] = useState(0);
+  /** The subject image's own labels: undefined while reading, null when unreadable. Docker
+   *  merges them into the container's `Config.Labels`, so this is the only way to say which
+   *  label came from the image and which was attached when the container was created. */
+  const [imageLabels, setImageLabels] = useState<[string, string][] | null>();
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
   const running = container?.state === "running";
@@ -301,6 +359,20 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
     })();
     return () => { alive = false; };
   }, [subject?.kind, subject?.id, subject?.runtime, refreshNonce]);
+
+  // A container's labels are the image's labels plus the ones attached when it was created;
+  // reading the image's own set is what lets the panel name each label's origin.
+  useEffect(() => {
+    setImageLabels(undefined);
+    const ref = subject?.kind === "container" ? container?.image : undefined;
+    if (!ref) return;
+    let alive = true;
+    const cmd = subject?.runtime === "podman" ? "podman_image_detail_cmd" : "image_detail_cmd";
+    invoke<ImageDetail>(cmd, { id: ref })
+      .then((next) => { if (alive) setImageLabels(Array.isArray(next?.labels) ? next.labels : null); })
+      .catch(() => { if (alive) setImageLabels(null); });
+    return () => { alive = false; };
+  }, [subject?.kind, subject?.id, subject?.runtime, container?.image, refreshNonce]);
 
   // Live numbers only exist for a running container. One streaming child feeds this panel
   // about once a second; if it cannot start or dies, the old five-second poll takes over.
@@ -435,6 +507,24 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   const iDetail = detail?.kind === "image" ? (detail.data as ImageDetail) : null;
   const vDetail = detail?.kind === "volume" ? (detail.data as VolumeDetail) : null;
   const nDetail = detail?.kind === "network" ? (detail.data as NetworkDetail) : null;
+
+  /** Labels by origin. A container is the only kind with two: its own set is the image's
+   *  labels with the run-time ones merged in, so each row is compared against the image. */
+  const labelGroups: LabelGroup[] = (() => {
+    if (cDetail) {
+      const pairs = cDetail.labels ?? [];
+      if (imageLabels == null) return pairs.length ? [{ title: "Labels", pairs }] : [];
+      const fromImage = new Map(imageLabels);
+      return [
+        { title: "Set at runtime", pairs: pairs.filter(([k, v]) => fromImage.get(k) !== v) },
+        { title: "From image", pairs: pairs.filter(([k, v]) => fromImage.get(k) === v) },
+      ];
+    }
+    if (iDetail) return [{ title: "From image", pairs: iDetail.labels ?? [] }];
+    if (vDetail) return [{ title: "Volume", pairs: vDetail.labels ?? [] }];
+    if (nDetail) return [{ title: "Network", pairs: nDetail.labels ?? [] }];
+    return [];
+  })();
 
   const imageRefs = imageRefSet(images, subject);
   const usedBy = subject.kind === "image"
@@ -851,7 +941,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
             </section>
 
             <KeyValuePanel title="Environment" pairs={cDetail?.env ?? []} note="secrets are masked" />
-            <KeyValuePanel title="Labels" pairs={cDetail?.labels ?? []} note="Docker object metadata" single limit={10} />
+            <LabelsPanel groups={labelGroups} note={imageLabels === null ? "image labels unavailable" : undefined} />
           </>
         )}
 
@@ -859,13 +949,13 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
           <>
             <BuildHistory layers={iDetail?.history ?? []} />
             <KeyValuePanel title="Environment" pairs={iDetail?.env ?? []} note="baked into the image" />
-            <KeyValuePanel title="Labels" pairs={iDetail?.labels ?? []} note="image metadata" single limit={10} />
+            <LabelsPanel groups={labelGroups} note="image metadata" />
           </>
         )}
 
         {volume && <VolumeContents profile={profile} name={subject.id} />}
-        {volume && <KeyValuePanel title="Labels" pairs={vDetail?.labels ?? []} note="volume metadata" single />}
-        {network && <KeyValuePanel title="Labels" pairs={nDetail?.labels ?? []} note="network metadata" single />}
+        {volume && <LabelsPanel groups={labelGroups} note="volume metadata" />}
+        {network && <LabelsPanel groups={labelGroups} note="network metadata" />}
         {network && nDetail?.options?.length ? <KeyValuePanel title="Driver options" pairs={nDetail.options} /> : null}
       </div>
 

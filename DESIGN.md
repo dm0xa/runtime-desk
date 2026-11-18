@@ -390,6 +390,7 @@ Controls 6px radius, panels and cards 10px, tiles and popovers 8px, modals 12px.
 
 ### Reference Lists
 - Environment and Labels are definition grids: environment in two aligned columns when width allows, labels in one; keys muted mono, values left-aligned and wrapping.
+- A container's Labels panel holds two sets — **Set at runtime**, then **From image** — because Docker merges the image's labels into the container's `Config.Labels`; the origin is recovered by comparing each value with the image's own set, and the split is drawn only once that set is known. One shared row budget and one **Show all N** control across both sets, so the split never doubles the panel.
 - Long lists truncate at 12 (environment) or 10 (labels, build history) with a quiet **Show all N** control; the panel is omitted when the set is empty.
 
 ### Cleanup
