@@ -6,10 +6,21 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
-- **Settings is one page with tabs, not a second sidebar.** General, Sidebar, Configuration and About sit in a segmented bar at the top of the content (arrow keys move the selection); the window title is simply **Settings**. The rail that repeated the navigation beside the sidebar is gone, **Delete profile** moved to the bottom of General under the facts it destroys, and the app menu's **About Runtime Desk** opens the same page instead of a second stock panel.
-- **The sidebar is one list.** Settings sits below the scrolling nav and above the profile switcher, without a one-row **System** heading, and group headings gain separation so the five sections read as sections rather than as rows.
-- **The Help menu is a Mac Help menu.** **Keyboard Shortcuts** (⌘/), **Runtime Desk Guide** and **Report an Issue…** replace the single generic item, and **Show Sidebar** is now **Toggle Sidebar**, which is what it does.
-- **A mount reads as a path, not a wrapped sentence.** Related › Mounts gives each row two lines — the host path or volume name, then `→ destination · kind` indented underneath — and a long host path now breaks after its `/` separators instead of mid-word beside the destination.
+## 1.4.0 — 2026-11-18
+
+### Changed
+
+- **Settings is one page with tabs.** General, Sidebar, Configuration and About sit in a segmented bar at the top (arrow keys work) instead of a second rail beside the sidebar, and **Delete profile** moved to the bottom of General. The app menu's **About Runtime Desk** opens that page too.
+- **The sidebar is one list.** Settings sits below the navigation and above the profile switcher, and group headings read as sections again.
+- **A Mac Help menu.** **Keyboard Shortcuts** (⌘/), **Runtime Desk Guide** and **Report an Issue…**, plus **Toggle Sidebar** — which is what it does.
+- **Activity is two cards.** **Live totals** keeps the fleet CPU chart, the metric strip and the rate cards; **Containers** is the table on its own, headed with the running count.
+- **Banners hug their message.** A one-line notice is the width of its sentence, not a 760px empty bar with the dismiss button at the far end.
+
+### Fixed
+
+- **A timeout says what is happening, and offers the fix.** "colima did not answer within 20s" now reads **Colima is not answering**, explains that a starting VM answers once it settles, and carries **Retry**; the CLI's own line stays behind **Show details**.
+- **A mount reads as a path, not a wrapped sentence.** Related › Mounts gives each row two lines, and a long host path breaks after its `/` separators instead of mid-word beside its destination.
+
 ## 1.3.0 — 2026-11-18
 
 ### Added
