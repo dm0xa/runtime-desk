@@ -223,6 +223,16 @@ pub fn lima_vms() -> Vec<LimaVm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// PATH is process-wide, so the test that rewrites it and the one that reads it take this
+    /// lock. Without it the Finder-launch test strips PATH between `system_status()`'s
+    /// `installed()` calls and the assertion's own, and the status test fails at random.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_path() -> std::sync::MutexGuard<'static, ()> {
+        PATH_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     /// Optional tooling must never reject: absent binaries return empty lists so the
     /// dashboard does not raise an error banner on every refresh.
@@ -234,6 +244,7 @@ mod tests {
 
     #[test]
     fn system_status_reports_missing_lima_as_false() {
+        let _path = lock_path();
         let status = system_status();
         assert_eq!(status.lima, installed("limactl"));
     }
@@ -242,12 +253,21 @@ mod tests {
     /// must be added back or every gated surface disappears.
     #[test]
     fn toolchain_path_recovers_from_a_finder_launch() {
-        // SAFETY: the only test that touches the process env.
+        let _path = lock_path();
+        let original = std::env::var_os("PATH");
+        // SAFETY: every test that reads PATH holds PATH_LOCK, so nothing observes the change.
         unsafe { std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin") };
         ensure_toolchain_path();
         let path = std::env::var("PATH").unwrap();
         assert!(path.starts_with("/opt/homebrew/bin:"), "{path}");
         assert!(path.ends_with("/usr/bin:/bin:/usr/sbin:/sbin"), "{path}");
         assert!(which_bin("sh").is_some(), "shell must still resolve");
+        // SAFETY: still under the lock; the next reader starts from the real PATH.
+        unsafe {
+            match original {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
     }
 }
