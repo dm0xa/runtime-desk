@@ -140,6 +140,7 @@ More detail:
 - [Architecture](docs/ARCHITECTURE.md)
 - [Dashboard cards](docs/DASHBOARD.md)
 - [Development](docs/DEVELOPMENT.md)
+- [OrbStack comparison](docs/ORBSTACK.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 

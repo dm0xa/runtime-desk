@@ -6,6 +6,10 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Added
+
+- **An OrbStack comparison, with the measurements OrbStack does not publish.** [docs/ORBSTACK.md](docs/ORBSTACK.md) audits the five published benchmarks (August 2023, v0.17.0 vs Docker Desktop 4.22.0, one M1 Max), records the independent DDEV and zot24 results that do include Colima, and adds this Mac's measured Colima baseline: 7.78% of one core idle for the VM process group, 1,352 MiB resident for a 6 GiB guest, 15.89 GiB on disk, and 90 ms for `docker info`.
+
 ## 1.4.0 — 2026-11-18
 
 ### Changed
