@@ -4,13 +4,16 @@ import { fmtBytes, fmtSize } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { memoryPressure } from "../lib/memoryGuard";
 import { Sparkline } from "./Sparkline";
+import { FingerprintIcon } from "./icons";
 
-export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }: {
+export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, onInvestigate }: {
   toolOk: boolean;
   profileRunning: boolean;
   profile: string;
   /** Guest allocation, so an "unlimited" container's ceiling reads as the VM, not a limit. */
   vmMemoryBytes: number;
+  /** Row action: hand the container to Sherlock, the one page that shows everything attached. */
+  onInvestigate: (id: string) => void;
 }) {
   const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
   useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
@@ -131,10 +134,11 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }:
                     <th>Network I/O</th>
                     <th>Block I/O</th>
                     <th>PIDs</th>
+                    <th className="activity-actions">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stats.length === 0 && <tr><td colSpan={6} className="empty">{loading ? "Reading the first sample…" : "No running containers."}</td></tr>}
+                  {stats.length === 0 && <tr><td colSpan={7} className="empty">{loading ? "Reading the first sample…" : "No running containers."}</td></tr>}
                   {stats.map((s) => (
                     <tr key={s.id}>
                       <td style={{ fontWeight: 600 }} title={s.name}>{isKubernetesName(s.name) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster, not by you">k8s</span>}{s.name}</td>
@@ -156,6 +160,16 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes }:
                       <td className="muted">↓ {fmtSize(s.net_rx)} · ↑ {fmtSize(s.net_tx)}</td>
                       <td className="muted">{fmtSize(s.block_read)} / {fmtSize(s.block_write)}</td>
                       <td className="muted">{s.pids}</td>
+                      <td className="activity-actions">
+                        <button
+                          className="icon-btn"
+                          aria-label={`Open ${s.name} in Sherlock`}
+                          title="Open in Sherlock"
+                          onClick={() => onInvestigate(s.id)}
+                        >
+                          <FingerprintIcon size={15} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

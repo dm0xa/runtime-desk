@@ -6,6 +6,7 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+- **Each Activity row opens its container in Sherlock.** The live table gained an Actions column with the Sherlock fingerprint icon, so the page that shows a container's CPU, memory and network also hands that container to the page that shows everything attached to it.
 ## 1.2.1 — 2026-11-18
 
 ### Fixed

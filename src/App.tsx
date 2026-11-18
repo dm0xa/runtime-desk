@@ -2204,6 +2204,7 @@ function App() {
               profileRunning={selectedRunning}
               profile={selected}
               vmMemoryBytes={profiles.find((p) => p.name === selected)?.memory ?? 0}
+              onInvestigate={(id) => openSubject({ kind: "container", id })}
             />
           )}
 

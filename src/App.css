@@ -1531,17 +1531,20 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 .activity-summary { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 12px 0 16px; box-shadow: inset 0 -1px 0 var(--sep); }
 .activity-summary .strip-sub { display: block; }
 .activity-table-wrap { margin-top: 4px; overflow: auto; }
-/* Only the container name absorbs slack; the five metric columns are sized to
-   their widest realistic value, which keeps the whole table inside the default
-   1300px window with no gaps between columns. Narrower windows scroll (the
-   min-width keeps the name column from collapsing to zero). */
-.activity-table { min-width: 996px; }
+/* Only the container name absorbs slack; the metric columns are sized to their
+   widest realistic value, and the trailing Actions column is one 30px icon button.
+   The 984px floor is the measured panel interior at the 1280px window
+   (1280 − 220 sidebar − 40 page gutters − 32 panel padding), so the table fills the
+   panel exactly instead of hiding 12px behind a sideways scroll. Narrower windows scroll. */
+.activity-table { min-width: 984px; }
 .activity-table th:nth-child(1) { width: auto; }
 .activity-table th:nth-child(2) { width: 178px; }
 .activity-table th:nth-child(3) { width: 232px; }
-.activity-table th:nth-child(4) { width: 170px; }
-.activity-table th:nth-child(5) { width: 152px; }
-.activity-table th:nth-child(6) { width: 64px; }
+.activity-table th:nth-child(4) { width: 148px; }
+.activity-table th:nth-child(5) { width: 132px; }
+.activity-table th:nth-child(6) { width: 56px; }
+.activity-table th:nth-child(7) { width: 56px; }
+.activity-table th.activity-actions, .activity-table td.activity-actions { text-align: right; }
 .activity-table td { vertical-align: middle; }
 .ap-cpu { display: flex; align-items: center; gap: 10px; }
 .ap-spark { width: 96px; height: 22px; display: block; }
