@@ -226,6 +226,17 @@ export function activityTotals(): {
 
 export const ACTIVITY_SAMPLES = SAMPLES;
 
+export type ContainerSeries = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[] };
+const EMPTY_SERIES: ContainerSeries = { cpu: [], mem: [], netRx: [], netTx: [] };
+
+/**
+ * Recorded series for one container, oldest first, capped at the activity window. Read-only:
+ * charts read these in place instead of copying every tick.
+ */
+export function activitySeriesFor(id: string): ContainerSeries {
+  return history.get(id) ?? EMPTY_SERIES;
+}
+
 /**
  * Highest CPU share in the recorded history, for the shared sparkline scale.
  * Using the history peak (not the current busiest container) keeps every row's

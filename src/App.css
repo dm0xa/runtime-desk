@@ -36,6 +36,16 @@
   --red: #ef4444;
   --red-solid: #b91c1c;
   --yellow: #f59e0b;
+  /* Categorical bands for the Sherlock group chart; row swatches reuse the same tokens. */
+  --seg-1: #22c55e;
+  --seg-2: #3b82f6;
+  --seg-3: #8b5cf6;
+  --seg-4: #f59e0b;
+  --seg-5: #14b8a6;
+  --seg-6: #ec4899;
+  --seg-7: #6366f1;
+  --seg-8: #ef4444;
+  --seg-other: #9ca3af;
   --green-text: #047857;
   --red-text: #b91c1c;
   --violet-text: #6d28d9;
@@ -78,6 +88,15 @@
     --red: #f85149;
     --red-solid: #b91c1c;
     --yellow: #d29922;
+    --seg-1: #22c55e;
+    --seg-2: #60a5fa;
+    --seg-3: #a78bfa;
+    --seg-4: #fbbf24;
+    --seg-5: #2dd4bf;
+    --seg-6: #f472b6;
+    --seg-7: #818cf8;
+    --seg-8: #f87171;
+    --seg-other: #8e8e93;
     --green-text: #4ade80;
     --red-text: #f85149;
     --violet-text: #a78bfa;
@@ -1039,10 +1058,36 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .inv-history-row:last-child { box-shadow: none; }
 .inv-history-size { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
 .inv-history-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Compose group page: one row per member, numbers in fixed columns so the list reads as a
+   table without a second table style. */
+.group-members { padding-top: 10px; }
+.inv-member-row { display: grid; grid-template-columns: 10px 92px minmax(0, 1fr) minmax(0, 1.1fr) 56px 76px 84px; gap: 12px; align-items: center; padding: 4px 0; box-shadow: inset 0 -1px 0 var(--sep); font-size: 12.5px; }
+.inv-member-row:last-child { box-shadow: none; }
+.group-swatch { width: 10px; height: 10px; border-radius: 3px; }
+/* Compose group page: three stacked charts; the legend is the row list below, so a band and
+   its container share one colour token across CPU, memory and network. */
+.group-chart { display: block; width: 100%; height: 104px; margin: 6px 0 2px; }
+/* CPU is the group's first question: it gets the full panel width and a taller plot; memory
+   and receive rate share the row below. */
+.group-trends { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.group-trends .trend-card.wide { grid-column: 1 / -1; }
+.group-trends .trend-card.wide .group-chart { height: 132px; }
+.group-trends .trend-card.wide .group-chart-empty { height: 132px; }
+.group-chart-band { stroke: none; }
+.group-chart-edge { fill: none; stroke-width: 1.2; stroke-linejoin: round; opacity: 0.85; }
+.group-chart-secondary { fill: none; stroke: var(--text); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: 0.45; }
+.group-chart-empty { display: grid; place-items: center; height: 104px; margin: 6px 0 2px; border-radius: 8px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--sep); color: var(--muted); font-size: 12px; text-align: center; padding: 0 10px; }
+.inv-member-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
+.inv-member-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
+.inv-port-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 @media (max-width: 1100px) {
   .investigator-grid { grid-template-columns: 1fr; }
   .investigator { padding-left: 16px; padding-right: 16px; }
   .picker { padding-left: 16px; padding-right: 16px; }
+  /* The image column is the one member-row cell that can go without losing a decision. */
+  .inv-member-row { grid-template-columns: 10px 86px minmax(0, 1fr) 54px 72px 80px; }
+  .inv-member-image { display: none; }
+  .group-trends { grid-template-columns: 1fr; }
 }
 
 /* --- Focus, selection, and detail surfaces --- */

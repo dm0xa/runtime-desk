@@ -16,17 +16,19 @@ import type {
 import { fmtBytes, fmtDateTime, fmtSize } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { startStatsStream } from "../lib/stats";
+import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activitySeriesFor, activitySnapshot, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
 import { PRESSURE_PCT } from "../lib/memoryGuard";
 import { addTag, removeTag, subscribeTags, tagsFor, type TagKind } from "../lib/tags";
 import { PortChips } from "./PortChips";
 import { VolumeContents } from "./VolumeContents";
 import { FactsGroup, Row } from "./Facts";
+import { GroupStackChart } from "./GroupChart";
 import { ArrowUpRightIcon, BracesIcon, FingerprintIcon, SlidersIcon, TerminalIcon } from "./icons";
 import { InspectModal, type InspectTarget } from "./InspectModal";
 import { RefreshIcon } from "./RefreshIcon";
 import { Sparkline } from "./Sparkline";
 
-export type Subject = { kind: "container" | "image" | "volume" | "network"; id: string; runtime?: "docker" | "podman" };
+export type Subject = { kind: "container" | "image" | "volume" | "network" | "group"; id: string; runtime?: "docker" | "podman" };
 
 type Props = {
   /** null renders the picker; a subject renders everything attached to it. */
@@ -295,6 +297,160 @@ function PerformanceSkeleton() {
   );
 }
 
+/** Containers that get their own band. The tail is summed into one neutral band, so a
+ *  fifty-service project still reads as three charts; the rows below list every member. */
+const GROUP_BANDS = 8;
+
+/** Per-sample rate from a cumulative counter series: the Activity tick is one second. */
+function rateSeries(counters: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < counters.length; i++) out.push(Math.max(0, counters[i] - counters[i - 1]));
+  return out;
+}
+
+/** Sums right-aligned series, so lists that started at different times end on the same sample. */
+function sumAligned(lists: number[][]): number[] {
+  const length = Math.max(0, ...lists.map((l) => l.length));
+  const out = new Array<number>(length).fill(0);
+  for (const list of lists) for (let i = 0; i < list.length; i++) out[length - list.length + i] += list[i];
+  return out;
+}
+
+/** A compose project's member containers with the numbers the shared Activity stream already
+ *  samples: the group page adds no `docker stats` child of its own. */
+function GroupPerformance({ members, onNavigate }: { members: Container[]; onNavigate: (subject: Subject) => void }) {
+  const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
+  useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
+
+  const statByMember = new Map<string, ContainerStat>();
+  for (const s of snap.stats) {
+    const hit = members.find((m) => m.id === s.id || (s.id && m.id.startsWith(s.id)));
+    if (hit) statByMember.set(hit.id, s);
+  }
+  // One series per container, shared by all three charts and by the rows below.
+  const series = members.map((m) => {
+    const recorded = activitySeriesFor(statByMember.get(m.id)?.id ?? m.id);
+    return {
+      m,
+      cpu: recorded.cpu,
+      mem: recorded.mem,
+      rx: rateSeries(recorded.netRx),
+      tx: rateSeries(recorded.netTx),
+    };
+  });
+  // Rank by the window's CPU peak, not by the instant: a container between spikes keeps its
+  // band, or colours would swap places every second and the charts would flicker.
+  const ranked = [...series].sort((a, b) =>
+    (b.cpu.length ? Math.max(...b.cpu) : 0) - (a.cpu.length ? Math.max(...a.cpu) : 0) || b.cpu.length - a.cpu.length);
+  const colorOf = new Map(ranked.slice(0, GROUP_BANDS).map((d, i) => [d.m.id, `var(--seg-${i + 1})`]));
+  // Same bands for CPU, memory and network: one colour means one container in all three charts.
+  const stack = (metric: "cpu" | "mem" | "rx") => {
+    const bands = ranked.slice(0, GROUP_BANDS).map((d, i) => ({
+      key: d.m.id, name: d.m.name, color: `var(--seg-${i + 1})`, values: d[metric],
+    }));
+    const tail = ranked.slice(GROUP_BANDS);
+    if (tail.length) {
+      bands.push({ key: "__other", name: `Other (${tail.length})`, color: "var(--seg-other)", values: sumAligned(tail.map((d) => d[metric])) });
+    }
+    return bands;
+  };
+
+  const running = members.filter((m) => m.state === "running");
+  const cpu = running.reduce((n, m) => n + (statByMember.get(m.id)?.cpu ?? 0), 0);
+  const mem = running.reduce((n, m) => n + (statByMember.get(m.id)?.mem ?? 0), 0);
+  const rx = series.reduce((n, d) => n + (d.rx[d.rx.length - 1] ?? 0), 0);
+  const tx = series.reduce((n, d) => n + (d.tx[d.tx.length - 1] ?? 0), 0);
+  const txTotal = sumAligned(ranked.map((d) => d.tx));
+  const samples = Math.max(0, ...ranked.map((d) => d.cpu.length));
+  const reading = snap.at === 0 && !snap.error;
+  const window = `${Math.min((samples * ACTIVITY_STEP_MS) / 1000, ACTIVITY_WINDOW_S)} s window`;
+
+  return (
+    <section className="panel inv-wide" aria-busy={reading}>
+      <div className="inv-panel-head">
+        <h3>Performance <span className="inv-count">{members.length}</span></h3>
+        <span className="muted inv-note">
+          {snap.error ? "live numbers unavailable" : reading ? "reading live numbers…" : `live · shared 1 s sample · ${window}`}
+        </span>
+      </div>
+      {members.length === 0 ? (
+        <p className="muted">No containers carry this project name any more.</p>
+      ) : (
+        <>
+          <div className="trend-grid group-trends">
+            <div className="trend-card wide">
+              <div className="trend-head">
+                <span className="inv-metric-label">CPU</span>
+                <span className="trend-value">{reading ? "—" : `${cpu.toFixed(1)}%`}</span>
+              </div>
+              <GroupStackChart
+                bands={stack("cpu")}
+                slots={ACTIVITY_SAMPLES}
+                label={`CPU across ${members.length} containers`}
+                format={(v) => `${v.toFixed(1)}%`}
+                floor={100}
+              />
+              <span className="inv-metric-sub">{running.length} of {members.length} running · scale 100% = one core</span>
+            </div>
+            <div className="trend-card">
+              <div className="trend-head">
+                <span className="inv-metric-label">Memory</span>
+                <span className="trend-value">{reading ? "—" : fmtBytes(mem)}</span>
+              </div>
+              <GroupStackChart
+                bands={stack("mem")}
+                slots={ACTIVITY_SAMPLES}
+                label={`Memory across ${members.length} containers`}
+                format={(v) => fmtBytes(v)}
+              />
+              <span className="inv-metric-sub">stacked per container · scale to window peak</span>
+            </div>
+            <div className="trend-card">
+              <div className="trend-head">
+                <span className="inv-metric-label">Network</span>
+                <span className="trend-value">{reading ? "—" : `${fmtSize(rx)}/s`}</span>
+              </div>
+              <GroupStackChart
+                bands={stack("rx")}
+                slots={ACTIVITY_SAMPLES}
+                label={`Network receive across ${members.length} containers`}
+                format={(v) => `${fmtSize(v)}/s`}
+                secondary={txTotal}
+                secondaryLabel={`Transmit ${fmtSize(tx)}/s`}
+              />
+              <span className="inv-metric-sub">receive stacked · transmit dashed · {fmtSize(tx)}/s up</span>
+            </div>
+          </div>
+          <div className="inv-group group-members">
+            {members.map((m) => {
+              const stat = statByMember.get(m.id);
+              const data = series.find((d) => d.m.id === m.id);
+              const color = colorOf.get(m.id);
+              const rxNow = data?.rx[data.rx.length - 1] ?? 0;
+              const txNow = data?.tx[data.tx.length - 1] ?? 0;
+              return (
+                <div className="inv-member-row" key={m.id}>
+                  <span
+                    className="group-swatch"
+                    style={{ background: color ?? "var(--seg-other)" }}
+                    title={color ? m.name : "Summed into Other on the charts"}
+                  />
+                  <span className={`status-badge ${m.state === "running" ? "running" : "stopped"}`}><span className="dot" />{m.state}</span>
+                  <button className="inv-link" onClick={() => onNavigate({ kind: "container", id: m.id })}>{m.name}</button>
+                  <span className="inv-member-image" title={m.image}>{m.image}</span>
+                  <span className="inv-member-num" title="CPU share of one core">{m.state === "running" ? (stat ? `${stat.cpu.toFixed(1)}%` : "—") : ""}</span>
+                  <span className="inv-member-num" title="Memory in use">{m.state === "running" ? (stat ? fmtBytes(stat.mem) : "—") : ""}</span>
+                  <span className="inv-member-num" title={`${fmtSize(rxNow)}/s receive · ${fmtSize(txNow)}/s transmit`}>{m.state === "running" ? `${fmtSize(rxNow)}/s` : ""}</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function InvestigatorPage({ subject, containers, images, volumes, networks, netMap, daemonUp, profile, refreshNonce, onPick, onNavigate, onOpenContainers, onOpenNetwork, onOpenLogs, onSetMemoryLimit }: Props) {
   const [detail, setDetail] = useState<{ kind: Subject["kind"]; data: ContainerDetail | ImageDetail | VolumeDetail | NetworkDetail } | null>(null);
   const [inspect, setInspect] = useState<InspectTarget | null>(null);
@@ -342,6 +498,8 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
     setDetail(null);
     setError(null);
     setInspect(null);
+    // A group is an index over containers the list already holds; there is no inspect payload.
+    if (subject.kind === "group") return;
     (async () => {
       try {
         const podman = subject.runtime === "podman";
@@ -494,7 +652,13 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   const image = subject.kind === "image" ? images.find((i) => i.id === subject.id) : undefined;
   const volume = subject.kind === "volume" ? volumes.find((v) => v.name === subject.id) : undefined;
   const network = subject.kind === "network" ? netMap.find((n) => n.name === subject.id) : undefined;
-  const title = subject.kind === "container"
+  /** A compose project is an entity in Sherlock: its identity is the project name and its
+   *  members are the containers the list already carries, so no new Rust surface exists. */
+  const groupMembers = subject.kind === "group" ? containers.filter((c) => c.compose_project === subject.id) : [];
+  const groupOldest = groupMembers.reduce<string>((min, c) => (!min || c.created_at < min ? c.created_at : min), "");
+  const title = subject.kind === "group"
+    ? subject.id
+    : subject.kind === "container"
     ? container?.name ?? subject.id
     : subject.kind === "image"
       ? (image ? `${image.repository}:${image.tag}` : subject.id)
@@ -604,18 +768,23 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
               if (network) onOpenNetwork(network.name, network.containers.map((c) => c.name));
               else if (image) onOpenContainers(`${image.repository}:${image.tag}`);
               else if (container) onOpenContainers(container.name);
+              else if (subject.kind === "group") onOpenContainers(subject.id);
               else onOpenContainers();
             }}
           >
             <ArrowUpRightIcon />
           </button>
-          <button className="icon-plain" aria-label="Inspect JSON" title="Inspect JSON" onClick={loadInspect}>
-            <BracesIcon />
-          </button>
+          {subject.kind !== "group" && (
+            <button className="icon-plain" aria-label="Inspect JSON" title="Inspect JSON" onClick={loadInspect}>
+              <BracesIcon />
+            </button>
+          )}
         </div>
       </div>
 
       {error && <div className="panel"><p className="muted">{error}</p></div>}
+
+      {subject.kind === "group" && <GroupPerformance members={groupMembers} onNavigate={onNavigate} />}
 
       {container && running && (
         <section className="panel" aria-busy={!stats && !statsError}>
@@ -690,6 +859,15 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
 
       <div className="investigator-grid">
         <div className="inv-side">
+          {subject.kind === "group" && (
+            <FactsGroup title="Project" card>
+              <Row label="Project" mono copy={subject.id}><code>{subject.id}</code></Row>
+              <Row label="Containers">{groupMembers.length}</Row>
+              <Row label="Running">{groupMembers.filter((c) => c.state === "running").length}</Row>
+              <Row label="Images">{new Set(groupMembers.map((c) => c.image)).size}</Row>
+              <Row label="Oldest">{groupOldest ? <>{fmtDateTime(groupOldest)}<span className="muted"> · {rel(groupOldest)}</span></> : "—"}</Row>
+            </FactsGroup>
+          )}
           {container && (
             <>
               <FactsGroup title="Identity" card>
@@ -802,6 +980,18 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
           <h3>Related</h3>
           <TagEditor kind={subject.kind} id={subject.id} />
 
+          {subject.kind === "group" && (
+            <div className="inv-group">
+              <div className="inv-group-title">Published ports</div>
+              {groupMembers.some((m) => m.ports) ? groupMembers.map((m) => (
+                <div className="inv-row" key={m.id}>
+                  <span className="inv-port-name" title={m.name}>{m.name}</span>
+                  <PortChips ports={m.ports} empty="" max={2} />
+                </div>
+              )) : <span className="muted">none</span>}
+            </div>
+          )}
+
           {container && (
             <>
               <div className="inv-group">
@@ -831,7 +1021,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                   <div className="inv-group-title">Compose</div>
                   {container.compose_project && (
                     <div className="inv-row">
-                      <button className="inv-link" onClick={() => onOpenContainers(container.compose_project)}>{container.compose_project}</button>
+                      <button className="inv-link" onClick={() => onNavigate({ kind: "group", id: container.compose_project })}>{container.compose_project}</button>
                       <span className="muted">project</span>
                     </div>
                   )}
@@ -992,6 +1182,7 @@ const KIND_LABEL: Record<Subject["kind"], string> = {
   image: "Images",
   volume: "Volumes",
   network: "Networks",
+  group: "Groups",
 };
 
 /** The empty state is the product: one search field, four kinds, every asset browsable. */
@@ -1014,6 +1205,28 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
   // Built once per data change, not once per keystroke: four sorts plus a mount scan per
   // volume is the whole index, and the query only narrows it.
   const groups: { kind: Subject["kind"]; entries: AssetEntry[] }[] = useMemo(() => [
+    {
+      kind: "group",
+      entries: (() => {
+        const byProject = new Map<string, Container[]>();
+        for (const c of containers) {
+          if (!c.compose_project) continue;
+          const rows = byProject.get(c.compose_project);
+          if (rows) rows.push(c); else byProject.set(c.compose_project, [c]);
+        }
+        return [...byProject.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([project, rows]) => {
+            const running = rows.filter((c) => c.state === "running").length;
+            return {
+              subject: { kind: "group" as const, id: project },
+              label: project,
+              meta: `${rows.length} container${rows.length === 1 ? "" : "s"} · ${running} running`,
+              state: running > 0 ? "running" as const : "stopped" as const,
+            };
+          });
+      })(),
+    },
     {
       kind: "container",
       entries: [...containers]
@@ -1068,7 +1281,7 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
           <FingerprintIcon size={26} />
         </span>
         <h2>Choose an asset</h2>
-        <p>Pick a container, image, volume or network. Sherlock shows everything attached to it.</p>
+        <p>Pick a Compose project, container, image, volume or network. Sherlock shows everything attached to it.</p>
       </div>
 
       {!daemonUp ? (
@@ -1085,7 +1298,7 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
               autoCorrect="off"
               autoCapitalize="off"
               autoComplete="off"
-              placeholder="Search containers, images, volumes, networks…"
+              placeholder="Search projects, containers, images, volumes, networks…"
               aria-label="Search assets"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -1098,7 +1311,7 @@ function AssetPicker({ containers, images, volumes, networks, netMap, daemonUp, 
               <button className={`chip ${kind === "all" ? "active" : ""}`} onClick={() => setKind("all")}>
                 All <span className="chip-count">{total}</span>
               </button>
-              {(Object.keys(KIND_LABEL) as Subject["kind"][]).map((k) => (
+              {(Object.keys(KIND_LABEL) as Subject["kind"][]).filter((k) => k !== "group" || counts.group > 0).map((k) => (
                 <button key={k} className={`chip ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>
                   {KIND_LABEL[k]} <span className="chip-count">{counts[k]}</span>
                 </button>

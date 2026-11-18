@@ -207,23 +207,25 @@ Built-in networks cannot be removed: the bin is disabled and says why on hover. 
 
 ## Sherlock
 
-A full page for one entity: container, image, volume, network. Open from:
+A full page for one entity: container, image, volume, network, or a Compose project (a group). Open from:
 
 - the **Investigate** icon in Actions of Images, Volumes and Networks, the Cleanup lists, or `⋯ → Investigate` in Containers and the Podman lists;
 - the **Used by** count on an image or volume;
 - ⌘K search or tag results;
-- the sidebar **Sherlock** item — a picker of every container, image, volume and network (filterable by kind; `↵` opens the first match) until you choose one.
+- a container's **Compose** project link;
+- the sidebar **Sherlock** item — a picker of every Compose group, container, image, volume and network (filterable by kind; `↵` opens the first match) until you choose one.
 
-The topbar's back button names its destination — the entity you hopped from, or the list you opened Sherlock from — and disappears when there is nowhere to return. The bar under it holds kind and name; its right end: Memory limit (Docker-runtime containers only), Logs, Open in Containers, Inspect JSON.
+The topbar's back button names its destination — the entity you hopped from, or the list you opened Sherlock from — and disappears when there is nowhere to return. The bar under it holds kind and name; its right end: Memory limit (Docker-runtime containers only), Logs, Open in Containers, Inspect JSON (absent for groups, which have no inspect payload).
 
 Two columns:
 
-- **Facts** left: **Identity**, **Lifecycle**, **Health**, **Limits** for a container; **Image** for an image; **Storage** for a volume; **Identity** for a network. **Runtime**, then **Related**, right; images get **Runtime** + Related, volumes **Timeline** + Related, networks **Addressing** + Related. IDs, references, mountpoints, hostnames and commands carry a copy button.
-- **Related** is links only — tags, networks, ports, mounts, Compose and peers for a container; used-by, ports, volumes and digests for an image; attached containers for a network.
+- **Facts** left: **Identity**, **Lifecycle**, **Health**, **Limits** for a container; **Image** for an image; **Storage** for a volume; **Identity** for a network; **Project** for a group (containers, running, images, oldest member). **Runtime**, then **Related**, right; images get **Runtime** + Related, volumes **Timeline** + Related, networks **Addressing** + Related. IDs, references, mountpoints, hostnames and commands carry a copy button.
+- **Related** is links only — tags, networks, ports, mounts, Compose and peers for a container; used-by, ports, volumes and digests for an image; attached containers for a network; published ports per member for a group.
 
-Full-width panels complete it. A **running container's Performance sits above the two columns** — live state is time-sensitive; a stopped container has none, since Lifecycle states it. The rest sit below:
+Full-width panels complete it. A **running container's Performance sits above the two columns** — live state is time-sensitive; a stopped container has none, since Lifecycle states it. A group's **Performance** sits there too, always. The rest sit below:
 
-- **Performance**: CPU, memory and network-rate history, then block I/O and process count. A Docker container gets one streaming `docker stats <id>` child at a sample per second, stopping with the container or the page; if it dies, the five-second `docker stats --no-stream` poll takes over. Podman has no streaming endpoint, so it runs `podman stats --no-stream` on that poll. Charts draw at ten samples (`collecting · chart in 5 s`), then name the window recorded (`45 s window`, up to `2 min window`). At 90% its memory value turns red with `near the limit, OOM-killed at 100%`. **Lifecycle** gains `Last exit` reading `OOM-killed`.
+- **Performance** (container): CPU, memory and network-rate history, then block I/O and process count. A Docker container gets one streaming `docker stats <id>` child at a sample per second, stopping with the container or the page; if it dies, the five-second `docker stats --no-stream` poll takes over. Podman has no streaming endpoint, so it runs `podman stats --no-stream` on that poll. Charts draw at ten samples (`collecting · chart in 5 s`), then name the window recorded (`45 s window`, up to `2 min window`). At 90% its memory value turns red with `near the limit, OOM-killed at 100%`. **Lifecycle** gains `Last exit` reading `OOM-killed`.
+- **Performance** (group): three charts — CPU across the full panel, memory and receive rate below — each stacked by container, so the top edge is the group total and every band is one member. One colour means the same container in all three; network draws the transmit total as a dashed line. Up to eight containers get a band and the rest are summed into **Other**; the row list below still shows every member's status, CPU, memory and receive rate, and its swatch is the chart legend.
 - **Recent output** (containers): the last 60 log lines, fetched on open with Reload. **Logs** in the page bar hands off to the viewer with search.
 - **Environment**: every variable, secret-looking names (`TOKEN`, `SECRET`, `PASSWORD`, `_KEY`, …) masked until **Show *N* secrets**, then **Hide secrets**. Long sets show 12 in two aligned columns with **Show all N**; omitted when empty.
 - **Labels**: a container's labels are split into **Set at runtime** and **From image**, judged by comparing each value against the image's own label set; when that image is gone the list stays flat and says **image labels unavailable**. Images, volumes and networks have one origin and one flat list. Compose project, service and config files stay split out under Related. First 10 rows across both groups, one **Show all N** for the panel.
@@ -237,7 +239,7 @@ Podman objects use the same page, reading Podman's inspect payloads and commands
 
 Free-form local labels: type and press `Enter` to add, `×` to remove. Lowercased, sorted, shown inline in the Containers list, Podman lists (including machine rows) and Sherlock pages.
 
-Stored in the app's local storage keyed by entity kind and ID — containers, images, volumes, networks, Podman machines. Docker cannot attach labels to existing objects, so tags are not Docker metadata and are not shared with other tools; clearing local data removes them.
+Stored in the app's local storage keyed by entity kind and ID — containers, images, volumes, networks, Compose groups, Podman machines. Docker cannot attach labels to existing objects, so tags are not Docker metadata and are not shared with other tools; clearing local data removes them.
 
 ## Search
 

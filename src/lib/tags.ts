@@ -3,12 +3,12 @@
  * container/image, so these live in localStorage keyed by entity id.
  */
 
-export type TagKind = "container" | "image" | "volume" | "network" | "profile" | "machine";
+export type TagKind = "container" | "image" | "volume" | "network" | "group" | "profile" | "machine";
 
 type TagMap = Record<TagKind, Record<string, string[]>>;
 
 const KEY = "runtimeDesk.tags";
-const EMPTY: TagMap = { container: {}, image: {}, volume: {}, network: {}, profile: {}, machine: {} };
+const EMPTY: TagMap = { container: {}, image: {}, volume: {}, network: {}, group: {}, profile: {}, machine: {} };
 
 let state: TagMap = load();
 const listeners = new Set<() => void>();
@@ -23,6 +23,7 @@ function load(): TagMap {
       image: parsed.image ?? {},
       volume: parsed.volume ?? {},
       network: parsed.network ?? {},
+      group: parsed.group ?? {},
       profile: parsed.profile ?? {},
       machine: parsed.machine ?? {},
     };

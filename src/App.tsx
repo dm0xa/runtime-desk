@@ -458,6 +458,7 @@ function App() {
       return i ? `${i.repository}:${i.tag}` : s.id;
     }
     if (s.kind === "volume") return volumes.find((v) => v.name === s.id)?.name ?? s.id;
+    if (s.kind === "group") return s.id;
     return netMap.find((n) => n.name === s.id)?.name ?? s.id;
   };
   const backLabel = backTarget
@@ -1164,7 +1165,7 @@ function App() {
   // card and leaving the page stops the 2s docker stats call entirely.
   const activityReady = !!tools?.docker
     && profiles.some((p) => p.name === selected && p.status.toLowerCase() === "running")
-    && (!!widgets.activity || tab === "activity");
+    && (!!widgets.activity || tab === "activity" || (tab === "sherlock" && subject?.kind === "group"));
   useEffect(() => {
     const apply = () => setActivityActive(activityReady && document.visibilityState === "visible");
     apply();
