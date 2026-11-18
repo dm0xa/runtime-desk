@@ -3,7 +3,7 @@
 ## Overview
 
 - **Frontend**: React 19 + TypeScript, built with Vite.
-- **Backend**: Rust, exposed to the frontend as 94 Tauri commands.
+- **Backend**: Rust, exposed to the frontend as 96 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
 A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 3 seconds, disk totals and per-volume sizes 60.
@@ -21,7 +21,7 @@ Assembly point; `main.rs` only calls `run()`.
 - `StatsStream` is the same shape for Sherlock's `docker stats <id>`: one JSON sample per second, then `__stats_end__` when stdout closes, so the panel falls back to polling instead of freezing on the last number.
 - `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
 
-Command groups (94 total):
+Command groups (96 total):
 
 - **Profiles and Colima VM** (18): `list_profiles_cmd`, `status_cmd`, `start_cmd`, `stop_cmd`, `restart_cmd`, `delete_cmd`, `set_profile_cmd`, `profile_config_cmd`, `version_cmd`, `template_cmd`, `ssh_config_cmd`, `prune_cmd`, `update_cmd`, `nerdctl_install_cmd`, `vm_diagnostics_cmd`, `version_check_cmd`, `upgrade_cmd`, `app_release_cmd`
 - **AI** (8): `model_run_cmd`, `model_list_cmd`, `model_pull_cmd`, `model_setup_cmd`, `model_chat_cmd`, `model_serve_start_cmd`, `model_serve_stop_cmd`, `model_serve_status_cmd`
@@ -29,7 +29,7 @@ Command groups (94 total):
 - **Images** (4): `list_images_cmd`, `image_detail_cmd`, `image_pull_cmd`, `image_remove_cmd`
 - **Volumes** (5): `list_volumes_cmd`, `volume_detail_cmd`, `volume_sizes_cmd`, `volume_contents_cmd`, `volume_remove_cmd`
 - **Networks** (4): `list_networks_cmd`, `network_map_cmd`, `network_detail_cmd`, `network_remove_cmd`
-- **Docker-wide and streams** (8): `disk_usage_cmd`, `docker_prune_cmd`, `cleanup_report_cmd`, `compose_list_cmd`, `events_start_cmd`, `events_stop_cmd`, `stats_start_cmd`, `stats_stop_cmd`
+- **Docker-wide and streams** (10): `disk_usage_cmd`, `docker_prune_cmd`, `cleanup_report_cmd`, `compose_list_cmd`, `events_start_cmd`, `events_stop_cmd`, `stats_start_cmd`, `stats_stop_cmd`, `stats_all_start_cmd`, `stats_all_stop_cmd`
 - **Podman machines** (8): `podman_machines_cmd`, `podman_machine_init_cmd`, `podman_set_machine_cmd`, `podman_machine_set_cmd`, `podman_start_cmd`, `podman_stop_cmd`, `podman_restart_cmd`, `podman_remove_cmd`
 - **Podman objects** (24): `podman_containers_cmd`, `podman_container_start_cmd`, `podman_container_stop_cmd`, `podman_container_restart_cmd`, `podman_container_remove_cmd`, `podman_container_logs_cmd`, `podman_container_detail_cmd`, `podman_container_inspect_json_cmd`, `podman_container_stats_cmd`, `podman_images_cmd`, `podman_image_pull_cmd`, `podman_image_remove_cmd`, `podman_image_detail_cmd`, `podman_image_inspect_cmd`, `podman_volumes_cmd`, `podman_volume_remove_cmd`, `podman_volume_detail_cmd`, `podman_volume_inspect_cmd`, `podman_networks_cmd`, `podman_network_remove_cmd`, `podman_network_detail_cmd`, `podman_network_inspect_cmd`, `podman_network_map_cmd`, `podman_disk_usage_cmd`
 - **Kubernetes** (4): `k8s_cluster_cmd`, `k8s_resources_cmd`, `k8s_logs_cmd`, `k8s_cluster_action_cmd`

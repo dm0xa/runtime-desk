@@ -44,7 +44,7 @@ npm run check:commands
 cd src-tauri && cargo test
 ```
 
-`npm run check:commands` (94 backend commands today) diffs every `#[tauri::command]` signature in `src-tauri/src/lib.rs` against every `"<name>_cmd"` reference and literal `invoke` payload under `src/`, failing on an unhandled command, a dead one, or a key missing from the payload; `--self-test` proves it catches both.
+`npm run check:commands` (96 backend commands today) diffs every `#[tauri::command]` signature in `src-tauri/src/lib.rs` against every `"<name>_cmd"` reference and literal `invoke` payload under `src/`, failing on an unhandled command, a dead one, or a key missing from the payload; `--self-test` proves it catches both.
 
 For layout and degraded-state work, render the built frontend headlessly: no container engine, no cluster, no Screen Recording grant.
 

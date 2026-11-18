@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-A macOS-only Rust desktop app wrapped by Tauri v2. The Rust side (`src-tauri/src/`) runs the CLIs off the UI thread as 94 Tauri commands; the frontend is React 19 + TypeScript + Vite in the system WKWebView, a 1300×820 window with a 900×600 floor and the macOS overlay title bar. Platform reads `web`: every pixel is HTML/CSS, no AppKit layer, no native controls. The menu bar is the only native UI, built in Rust (`menu.rs`) so macOS owns accelerators.
+A macOS-only Rust desktop app wrapped by Tauri v2. The Rust side (`src-tauri/src/`) runs the CLIs off the UI thread as 96 Tauri commands; the frontend is React 19 + TypeScript + Vite in the system WKWebView, a 1300×820 window with a 900×600 floor and the macOS overlay title bar. Platform reads `web`: every pixel is HTML/CSS, no AppKit layer, no native controls. The menu bar is the only native UI, built in Rust (`menu.rs`) so macOS owns accelerators.
 
 ## Users
 
