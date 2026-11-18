@@ -7,6 +7,8 @@ export type Problem = {
   evidence?: string;
   /** Container the problem refers to, when Docker named one. */
   containerId?: string;
+  /** The failure is a stalled read, so re-running the page's refresh is the remedy. */
+  retryable?: boolean;
 };
 
 const stripPrefix = (raw: string) => raw.replace(/^Error response from daemon:\s*/i, "").replace(/^Error:\s*/i, "").trim();
@@ -69,6 +71,22 @@ export function humanizeDockerError(raw: string, images: Image[], containers: Co
     // directory, a bind mount. Guessing "the socket" turns one denial into the wrong one.
     const target = /(?:permission denied|operation not permitted)[^\n]*?((?:\/|unix:\/\/|~\/)[^\s"',]+)/i.exec(msg)?.[1]?.replace(/[:.,;]+$/, "");
     return withEvidence({ title: "Permission denied", detail: target ? `The container CLI was denied access to ${target}.` : undefined }, msg);
+  }
+  // The Rust side prints "<label> did not answer within <n>s" when a call hits its deadline
+  // (proc.rs::Error::Timeout). A stalled daemon is not a failed command, so the headline is
+  // the state and the detail says what to do instead of repeating the timeout sentence.
+  const timeout = msg.match(/^(.+?) did not answer within (\d+)s(?::\s*([\s\S]*))?$/i);
+  if (timeout) {
+    // `program_label` is the bare executable name; two of them read wrong capitalized.
+    const TOOL_NAME: Record<string, string> = { colima: "Colima", docker: "Docker", podman: "Podman", nerdctl: "nerdctl", limactl: "Lima", kubectl: "kubectl", ramalama: "RamaLama" };
+    const label = TOOL_NAME[timeout[1].trim()] ?? timeout[1].trim();
+    const tail = timeout[3]?.trim();
+    return {
+      title: `${label} is not answering`,
+      detail: `No reply within ${timeout[2]} s. A VM that is starting answers once it settles — retry in a moment.`,
+      evidence: tail || undefined,
+      retryable: true,
+    };
   }
   if (/no such (container|image|volume|network|object)/i.test(msg)) {
     return withEvidence({ title: "Already gone", detail: msg }, msg);

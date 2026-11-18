@@ -887,13 +887,19 @@ function App() {
 
   function reportProblem(e: unknown) {
     const problem = humanizeDockerError(String(e), imagesRef.current, containersRef.current);
-    pushNotice({
+    // A stalled read is the one failure whose fix is the button already in the header, so
+    // the banner carries it: retry, then stand down once the read has been reissued.
+    const id = pushNotice({
       kind: "error",
       title: problem.title,
       detail: problem.detail,
       evidence: problem.evidence,
       containerId: problem.containerId,
-      actions: problem.containerId ? containerActions(problem.containerId) : undefined,
+      actions: problem.containerId
+        ? containerActions(problem.containerId)
+        : problem.retryable
+          ? [{ label: "Retry", run: () => { setNotices((list) => list.filter((n) => n.id !== id)); void pageRefresh(); } }]
+          : undefined,
     });
   }
 
