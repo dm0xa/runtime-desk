@@ -51,7 +51,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
         <div className="section-head">
           <div>
             <h3>Live totals</h3>
-            <p className="muted">Streamed from <code>docker stats</code> at about 1 Hz while the app is frontmost.</p>
+            <p className="muted">Streamed from <code>docker stats</code> at about 1 Hz while the monitor is on.</p>
           </div>
         </div>
 
@@ -59,7 +59,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
         {toolOk && !profileRunning && <p className="muted">Profile <code>{profile}</code> is stopped. Start it to collect stats.</p>}
         {snap.error && <p className="muted">{snap.error}</p>}
         {loading && <p className="muted" role="status">Reading the first sample from <code>docker stats</code>…</p>}
-        {stale && <p className="muted">The monitor is paused (the app is in the background) — these are the last reading, {staleSeconds}s old.</p>}
+        {stale && <p className="muted">No sample for {staleSeconds}s — these are the last numbers read.</p>}
         {pressure.length > 0 && (
           <p className="diag-summary attention">
             {pressure.slice(0, 3).map((p) => p.unbounded

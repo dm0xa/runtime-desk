@@ -470,7 +470,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   /** First and last sample timestamps, plus whether the poll fallback is driving them: the
    *  x-axis is real elapsed time, not a count times an assumed one-second cadence. */
   const [trendMeta, setTrendMeta] = useState({ first: 0, last: 0, polling: false });
-  const [visible, setVisible] = useState(() => document.visibilityState === "visible");
+
   const trendOwner = useRef<string>("");
   const prevSample = useRef<{ at: number; rx: number; tx: number } | null>(null);
   const [logs, setLogs] = useState<string | null>(null);
@@ -486,13 +486,6 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   /** Real seconds between the first and last sample, and how far apart samples land. */
   const trendSpan = trendMeta.first && trendMeta.last ? Math.round((trendMeta.last - trendMeta.first) / 1000) : 0;
   const trendStep = trendMeta.polling ? POLL_MS / 1000 : 1;
-
-  // A hidden window must not keep a `docker stats` child alive: the sampler pauses.
-  useEffect(() => {
-    const sync = () => setVisible(document.visibilityState === "visible");
-    document.addEventListener("visibilitychange", sync);
-    return () => document.removeEventListener("visibilitychange", sync);
-  }, []);
 
   useEffect(() => {
     if (!subject) {
@@ -541,6 +534,8 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
 
   // Live numbers only exist for a running container. One streaming child feeds this panel
   // about once a second; if it cannot start or dies, the old five-second poll takes over.
+  // The child stays up while the window is in the background, so the trend has no gap when
+  // the user comes back.
   useEffect(() => {
     if (subject && subject.kind === "container" && trendOwner.current !== subject.id) {
       trendOwner.current = subject.id;
@@ -554,13 +549,10 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       setStats(null);
       setStatsError(null);
     }
-    if (!subject || subject.kind !== "container" || !running || !visible) {
-      // A stopped container must not keep showing its last numbers; a hidden window keeps
-      // them, because the panel resumes the moment it is visible again.
-      if (!subject || subject.kind !== "container" || !running) {
-        setStats(null);
-        setStatsError(null);
-      }
+    if (!subject || subject.kind !== "container" || !running) {
+      // A stopped container must not keep showing its last numbers.
+      setStats(null);
+      setStatsError(null);
       return;
     }
     let alive = true;
@@ -630,7 +622,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       clearInterval(timer);
       stop?.();
     };
-  }, [subject?.kind, subject?.id, subject?.runtime, running, statsNonce, refreshNonce, visible]);
+  }, [subject?.kind, subject?.id, subject?.runtime, running, statsNonce, refreshNonce]);
 
   useEffect(() => {
     setLogs(null);

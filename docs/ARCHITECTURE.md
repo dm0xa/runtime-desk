@@ -266,10 +266,11 @@ The App activates the store when:
 activityReady =
   docker tool installed &&
   selected profile running &&
-  (activity widget visible || Activity tab open)
+  (activity widget visible || Activity tab open ||
+   Sherlock is showing a Compose group)
 ```
 
-plus `document.visibilityState === "visible"`. Views only subscribe, so switching tabs keeps history and hiding the card stops the call.
+Views only subscribe, so switching tabs keeps history and hiding the card stops the call. The sampler is independent of `document.visibilityState` on purpose: one long-lived stream spawns nothing per tick, and pausing it on a window switch left the charts with a gap (the Sherlock group panel fell back to its "Collecting the first samples…" placeholder on return). List refreshes and the `docker events` stream stay visibility-gated — those spawn CLI children per run.
 
 ### OOM guard
 

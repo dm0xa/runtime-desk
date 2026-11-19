@@ -1314,17 +1314,17 @@ function App() {
   useEffect(() => { loadStatus(selected); loadConfig(selected); setSshConfig(""); }, [selected]);
   // Release check is a network call, so it runs when Settings is opened, not on every refresh.
   useEffect(() => { if (tab === "settings") { void checkVersion(); void checkAppRelease(); } }, [tab]);
-  // One polling lifecycle for live stats: gate open + window frontmost.
-  // Poll while the monitor is "on": its card is enabled or its page is open. Hiding the
-  // card and leaving the page stops the 2s docker stats call entirely.
+  // One sampling lifecycle for live stats: open while the monitor is "on" — its card is
+  // enabled or its page is open — and closed when neither is. Window visibility is not part
+  // of the gate: the sampler is one long-lived `docker stats` child that spawns nothing per
+  // tick, and stopping it on every window switch punched a hole in the history that the
+  // charts exist to show (the group page fell back to "Collecting the first samples…").
   const activityReady = !!tools?.docker
     && profiles.some((p) => p.name === selected && p.status.toLowerCase() === "running")
     && (!!widgets.activity || tab === "activity" || (tab === "sherlock" && subject?.kind === "group"));
   useEffect(() => {
-    const apply = () => setActivityActive(activityReady && document.visibilityState === "visible");
-    apply();
-    document.addEventListener("visibilitychange", apply);
-    return () => { document.removeEventListener("visibilitychange", apply); setActivityActive(false); };
+    setActivityActive(activityReady);
+    return () => setActivityActive(false);
   }, [activityReady]);
   // OOM guard: it reads the stats the monitor already samples instead of adding a poll, so
   // it runs while the Activity card or page is on. A container crossing the pressure

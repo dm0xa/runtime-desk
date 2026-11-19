@@ -89,7 +89,7 @@ Live container metrics from `docker stats`.
 
 Header: search (global scope only — no list here), a container-box icon opening the container list (hover: **Open Containers**), Refresh.
 
-Two panels, both streamed at about 1 Hz while frontmost from one `docker stats` child (a two-second `--no-stream` poll takes over if the stream is refused or ends). Before the first answer: **Reading the first sample from `docker stats`…** rather than 0%; paused in the background it says so and ages the last reading.
+Two panels, both streamed at about 1 Hz from one `docker stats` child (a two-second `--no-stream` poll takes over if the stream is refused or ends). Before the first answer: **Reading the first sample from `docker stats`…** rather than 0%; if samples stop, the page ages the last reading instead of claiming it is live. Sampling does not pause when the window is in the background, so the charts have no gap when you come back.
 
 **Live totals** holds the fleet numbers: a 72-second total-CPU chart, then a strip — CPU, memory, network received/sent, block I/O read/written, PIDs — with network and block I/O cumulative since each container started, then memory and network receive **rate** (bytes per second) charts.
 
@@ -97,7 +97,7 @@ Two panels, both streamed at about 1 Hz while frontmost from one `docker stats` 
 
 Each chart has its own ceiling: total CPU from 100%, rising when a container exceeds one core; memory and network scale to their window peak. At three samples the span stretches across the card with its share stated (`8 s of 72 s recorded`); a full window prints `peak N% · 72 s window`.
 
-Runs only with the Docker CLI installed, the profile running, the page **or** its card on, and the window frontmost; hiding the card and leaving the page stops the call.
+Runs only with the Docker CLI installed, the profile running, and the page **or** its card on; hiding the card and leaving the page stops the call. Window focus is not part of the gate — the stream is one child, so it keeps collecting while the app is behind another window.
 
 The card compacts it: a 72-second total-CPU chart, then a row per running container sorted by CPU with sparkline, percentage and memory on one shared scale; a row opens it in Sherlock. The bottom row sums CPU and memory and counts containers; rows cap at six, reading `top 6 of N running` beyond.
 

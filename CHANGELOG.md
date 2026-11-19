@@ -6,6 +6,10 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Fixed
+
+- **Live stats keep sampling while the window is in the background.** The activity sampler is one long-lived `docker stats` child, so pausing it on a window switch only punched a hole in the charts: Sherlock's Compose group panel fell back to **Collecting the first samples from `docker stats`…** on return. The container Performance panel's stream no longer pauses either. List refreshes and the `docker events` stream stay visibility-gated, because those spawn a CLI child per run.
+
 ## 1.5.0 — 2026-11-19
 
 ### Changed
