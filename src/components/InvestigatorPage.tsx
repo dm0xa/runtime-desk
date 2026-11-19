@@ -681,7 +681,11 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, stale,
 }) {
   const local = new Map(images.map((i) => [`${i.repository}:${i.tag}`, i]));
   const refs = [...new Set(rows.map((r) => r.m.image))].sort();
-  const services = new Map(refs.map((ref) => [ref, rows.filter((r) => r.m.image === ref).length]));
+  // Distinct Compose services, not containers: three replicas of one service is one service.
+  const services = new Map(refs.map((ref) => [
+    ref,
+    new Set(rows.filter((r) => r.m.image === ref).map((r) => serviceName(r.m, r.d))).size,
+  ]));
   const sizes = new Map(refs.map((ref) => {
     const img = local.get(ref);
     return [ref, img ? parseHumanBytes(img.size) : 0];
@@ -691,11 +695,13 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, stale,
 
   // Named volumes come from the inspect payload: the list's `mounts` string cannot tell a
   // volume from a bind, and a project's storage is the volume part.
-  const volumesUsed = new Map<string, number>();
+  const volumesUsed = new Map<string, Set<string>>();
   for (const r of rows) {
     for (const mount of r.d?.mounts ?? []) {
       if (mount.kind !== "volume" || !mount.source) continue;
-      volumesUsed.set(mount.source, (volumesUsed.get(mount.source) ?? 0) + 1);
+      const holders = volumesUsed.get(mount.source) ?? new Set<string>();
+      holders.add(serviceName(r.m, r.d));
+      volumesUsed.set(mount.source, holders);
     }
   }
   const volSize = new Map(volSizes.map((v) => [v.name, v.size]));
@@ -744,13 +750,13 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, stale,
         <div className="inv-group-title">Volumes<span className="inv-count">{volumesUsed.size}</span></div>
         {volumesUsed.size === 0 ? <span className="muted">no named volumes</span> : [...volumesUsed.entries()]
           .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name, count]) => (
+          .map(([name, holders]) => (
             <div className="inv-row inv-mount" key={name}>
               <button className="inv-link" onClick={() => onNavigate({ kind: "volume", id: name })}><code>{name}</code></button>
               <span className="muted">
                 {volSize.has(name) ? fmtSize(volSize.get(name) ?? 0) : volSizes.length ? "size unknown" : "size not scanned"}
-                {` · ${count} service${count === 1 ? "" : "s"}`}
-                {count > 1 ? " · shared" : ""}
+                {` · ${holders.size} service${holders.size === 1 ? "" : "s"}`}
+                {holders.size > 1 ? ` · shared by ${holders.size > 3 ? `${holders.size} services` : [...holders].join(", ")}` : ""}
               </span>
             </div>
           ))}
