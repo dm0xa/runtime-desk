@@ -6,6 +6,16 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Added
+
+- **Hovering a project member traces it through every chart.** The CPU, memory and network stacks dim every other band and brighten that container's own, so the colour swatch in the row is now a live link instead of a legend key.
+- **Every live chart prints its own time axis.** A muted `6 s ago … now` row under the plot names the frame the chart actually holds, and the Compose project header reads `last 2 min` (or `last 10 min`) instead of `72 s window`.
+- **A `2 min` / `10 min` switch on every live chart.** Activity keeps ten minutes of one-second samples; the switch picks the tail the charts, row sparklines and Compact Activity card draw. The choice is shared by Activity, a container's Performance and a Compose group, and persists as `runtimeDesk.liveWindow`.
+
+### Fixed
+
+- **A resumed sampler starts a new recording.** When Activity sampling comes back after more than two silent ticks, the old samples are dropped instead of being spliced onto the new ones across a gap the chart would have drawn as continuous.
+
 ## 1.6.0 — 2026-11-19
 
 ### Added

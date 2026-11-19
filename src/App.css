@@ -796,7 +796,7 @@ pre, pre *, code, input, textarea, .table td, .kv, .logs {
 .help-row > span:last-child { color: var(--text); display: inline-flex; align-items: center; gap: 4px; }
 kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px 6px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11px; color: var(--text); box-shadow: inset 0 -1px 0 var(--sep); }
 @media (prefers-reduced-motion: reduce) {
-  .spin, .busy-bar, .activity-bar > span, .spark, .card-action, .strip-action, .search-field input, .volume-cell-ghost::after, .cleanup-skeleton::after, .spark-skeleton::after { animation: none !important; transition: none !important; }
+  .spin, .busy-bar, .activity-bar > span, .spark, .card-action, .strip-action, .search-field input, .volume-cell-ghost::after, .cleanup-skeleton::after, .spark-skeleton::after, .inv-member-row, .group-chart-band, .group-chart-edge, .group-chart-secondary { animation: none !important; transition: none !important; }
   .onboarding-rotor, .onboarding-rotor-word { transition: none !important; }
   html { scroll-behavior: auto !important; }
 }
@@ -1087,8 +1087,10 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 /* Compose group page: one row per member, numbers in fixed columns so the list reads as a
    table without a second table style. */
 .group-members { padding-top: 10px; }
-.inv-member-row { display: grid; grid-template-columns: 10px 92px minmax(0, 1fr) minmax(0, 1.1fr) 56px 76px 84px; gap: 12px; align-items: center; padding: 4px 0; box-shadow: inset 0 -1px 0 var(--sep); font-size: 12.5px; }
+.inv-member-row { display: grid; grid-template-columns: 10px 92px minmax(0, 1fr) minmax(0, 1.1fr) 56px 76px 84px; gap: 12px; align-items: center; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; box-shadow: inset 0 -1px 0 var(--sep); font-size: 12.5px; transition: background-color 120ms ease; }
 .inv-member-row:last-child { box-shadow: none; }
+/* Hovering a member traces it through the three charts above; the row marks the link. */
+.inv-member-row:hover, .inv-member-row.is-linked { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .group-swatch { width: 10px; height: 10px; border-radius: 3px; }
 /* Compose group page: three stacked charts; the legend is the row list below, so a band and
    its container share one colour token across CPU, memory and network. */
@@ -1099,9 +1101,9 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .group-trends .trend-card.wide { grid-column: 1 / -1; }
 .group-trends .trend-card.wide .group-chart { height: 132px; }
 .group-trends .trend-card.wide .group-chart-empty { height: 132px; }
-.group-chart-band { stroke: none; }
-.group-chart-edge { fill: none; stroke-width: 1.2; stroke-linejoin: round; opacity: 0.85; }
-.group-chart-secondary { fill: none; stroke: var(--text); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: 0.45; }
+.group-chart-band { stroke: none; transition: fill-opacity 120ms ease; }
+.group-chart-edge { fill: none; stroke-width: 1.2; stroke-linejoin: round; opacity: 0.85; transition: opacity 120ms ease, stroke-width 120ms ease; }
+.group-chart-secondary { fill: none; stroke: var(--text); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: 0.45; transition: opacity 120ms ease; }
 .group-chart-empty { display: grid; place-items: center; height: 104px; margin: 6px 0 2px; border-radius: 8px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--sep); color: var(--muted); font-size: 12px; text-align: center; padding: 0 10px; }
 .inv-member-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
 .inv-member-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }

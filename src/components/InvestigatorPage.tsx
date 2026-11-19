@@ -381,6 +381,9 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
   const ranked = [...series].sort((a, b) =>
     (b.cpu.length ? Math.max(...b.cpu) : 0) - (a.cpu.length ? Math.max(...a.cpu) : 0) || b.cpu.length - a.cpu.length);
   const colorOf = new Map(ranked.slice(0, GROUP_BANDS).map((d, i) => [d.m.id, `var(--seg-${i + 1})`]));
+  /** Hovering a row traces one container through all three charts; leaving restores the stack. */
+  const [hoveredMember, setHoveredMember] = useState<string | null>(null);
+  const activeBand = hoveredMember === null ? null : colorOf.has(hoveredMember) ? hoveredMember : "__other";
   // Same bands for CPU, memory and network: one colour means one container in all three charts.
   const stack = (metric: "cpu" | "mem" | "rx") => {
     const bands = ranked.slice(0, GROUP_BANDS).map((d, i) => ({
@@ -440,6 +443,7 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
                 label={`CPU across ${members.length} containers`}
                 format={(v) => `${v.toFixed(1)}%`}
                 floor={100}
+                activeKey={activeBand}
               />
               <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">{running.length} of {members.length} running · scale 100% = one core</span>
@@ -454,6 +458,7 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
                 slots={win}
                 label={`Memory across ${members.length} containers`}
                 format={(v) => fmtBytes(v)}
+                activeKey={activeBand}
               />
               <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">
@@ -474,6 +479,7 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
                 format={(v) => `${fmtSize(v)}/s`}
                 secondary={txTotal}
                 secondaryLabel={`Transmit ${fmtSize(tx)}/s`}
+                activeKey={activeBand}
               />
               <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">receive stacked · transmit dashed · {fmtSize(tx)}/s up</span>
@@ -499,7 +505,14 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
               const rxNow = data?.rx[data.rx.length - 1] ?? 0;
               const txNow = data?.tx[data.tx.length - 1] ?? 0;
               return (
-                <div className="inv-member-row" key={m.id}>
+                <div
+                  className={`inv-member-row${hoveredMember === m.id ? " is-linked" : ""}`}
+                  key={m.id}
+                  onMouseEnter={() => setHoveredMember(m.id)}
+                  onMouseLeave={() => setHoveredMember(null)}
+                  onFocus={() => setHoveredMember(m.id)}
+                  onBlur={() => setHoveredMember(null)}
+                >
                   <span
                     className="group-swatch"
                     style={{ background: color ?? "var(--seg-other)" }}

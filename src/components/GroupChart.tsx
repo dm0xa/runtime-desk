@@ -16,7 +16,7 @@ const HEIGHT = 104;
  * much the group uses and who is using it. CPU, memory and network pass the same bands and
  * colours, so a colour means one container across all three charts.
  */
-export function GroupStackChart({ bands, slots, label, format, floor = 0, secondary, secondaryLabel }: {
+export function GroupStackChart({ bands, slots, label, format, floor = 0, secondary, secondaryLabel, activeKey = null }: {
   bands: Band[];
   slots: number;
   label: string;
@@ -27,6 +27,8 @@ export function GroupStackChart({ bands, slots, label, format, floor = 0, second
   /** Group total drawn as a light line, for a second metric such as network transmit. */
   secondary?: number[];
   secondaryLabel?: string;
+  /** The band linked to a hovered row: everything else dims so one container is traceable. */
+  activeKey?: string | null;
 }) {
   const length = Math.max(0, ...bands.map((b) => b.values.length));
   const n = Math.min(length, slots);
@@ -86,16 +88,36 @@ export function GroupStackChart({ bands, slots, label, format, floor = 0, second
         <line key={fraction} className="spark-mid" x1="0" y1={HEIGHT * fraction} x2={WIDTH} y2={HEIGHT * fraction} vectorEffect="non-scaling-stroke" />
       ))}
       <line className="spark-axis" x1="0" y1={HEIGHT - 0.5} x2={WIDTH} y2={HEIGHT - 0.5} vectorEffect="non-scaling-stroke" />
-      {paths.map(({ band, area, line, peak }) => (
-        <g key={band.key}>
-          <path className="group-chart-band" d={area} fill={band.color} style={{ fillOpacity: 0.5 }}>
-            <title>{`${band.name} — now ${format(band.values[band.values.length - 1] ?? 0)}, peak ${format(peak)}`}</title>
-          </path>
-          <path className="group-chart-edge" d={line} stroke={band.color} vectorEffect="non-scaling-stroke" />
-        </g>
-      ))}
+      {paths.map(({ band, area, line, peak }) => {
+        const active = activeKey !== null && band.key === activeKey;
+        const dim = activeKey !== null && !active;
+        return (
+          <g key={band.key}>
+            <path
+              className="group-chart-band"
+              d={area}
+              fill={band.color}
+              style={{ fillOpacity: active ? 0.72 : dim ? 0.07 : 0.5 }}
+            >
+              <title>{`${band.name} — now ${format(band.values[band.values.length - 1] ?? 0)}, peak ${format(peak)}`}</title>
+            </path>
+            <path
+              className="group-chart-edge"
+              d={line}
+              stroke={band.color}
+              style={{ strokeWidth: active ? 2 : 1.2, opacity: dim ? 0.16 : active ? 1 : 0.85 }}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
+        );
+      })}
       {secondaryLine && (
-        <path className="group-chart-secondary" d={secondaryLine} vectorEffect="non-scaling-stroke">
+        <path
+          className="group-chart-secondary"
+          d={secondaryLine}
+          style={{ opacity: activeKey !== null ? 0.16 : 0.45 }}
+          vectorEffect="non-scaling-stroke"
+        >
           <title>{secondaryLabel ?? "Group total"}</title>
         </path>
       )}
