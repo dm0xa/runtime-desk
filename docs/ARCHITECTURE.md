@@ -3,7 +3,7 @@
 ## Overview
 
 - **Frontend**: React 19 + TypeScript, built with Vite.
-- **Backend**: Rust, exposed to the frontend as 96 Tauri commands.
+- **Backend**: Rust, exposed to the frontend as 97 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
 A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 10 seconds, `colima status` per profile 5 minutes (cleared by any profile mutation), disk totals and per-volume sizes 60.
@@ -21,12 +21,12 @@ Assembly point; `main.rs` only calls `run()`.
 - `StatsStream` is the same shape for Sherlock's `docker stats <id>`: one JSON sample per second, then `__stats_end__` when stdout closes, so the panel falls back to polling instead of freezing on the last number.
 - `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
 
-Command groups (96 total):
+Command groups (97 total):
 
 - **Profiles and Colima VM** (18): `list_profiles_cmd`, `status_cmd`, `start_cmd`, `stop_cmd`, `restart_cmd`, `delete_cmd`, `set_profile_cmd`, `profile_config_cmd`, `version_cmd`, `template_cmd`, `ssh_config_cmd`, `prune_cmd`, `update_cmd`, `nerdctl_install_cmd`, `vm_diagnostics_cmd`, `version_check_cmd`, `upgrade_cmd`, `app_release_cmd`
 - **AI** (8): `model_run_cmd`, `model_list_cmd`, `model_pull_cmd`, `model_setup_cmd`, `model_chat_cmd`, `model_serve_start_cmd`, `model_serve_stop_cmd`, `model_serve_status_cmd`
 - **Containers** (8): `list_containers_cmd`, `container_action_cmd`, `container_detail_cmd`, `container_logs_cmd`, `container_stats_cmd`, `container_stats_one_cmd`, `container_update_memory_cmd`, `inspect_cmd`
-- **Images** (4): `list_images_cmd`, `image_detail_cmd`, `image_pull_cmd`, `image_remove_cmd`
+- **Images** (5): `list_images_cmd`, `image_platforms_cmd`, `image_detail_cmd`, `image_pull_cmd`, `image_remove_cmd`
 - **Volumes** (5): `list_volumes_cmd`, `volume_detail_cmd`, `volume_sizes_cmd`, `volume_contents_cmd`, `volume_remove_cmd`
 - **Networks** (4): `list_networks_cmd`, `network_map_cmd`, `network_detail_cmd`, `network_remove_cmd`
 - **Docker-wide and streams** (10): `disk_usage_cmd`, `docker_prune_cmd`, `cleanup_report_cmd`, `compose_list_cmd`, `events_start_cmd`, `events_stop_cmd`, `stats_start_cmd`, `stats_stop_cmd`, `stats_all_start_cmd`, `stats_all_stop_cmd`
@@ -51,7 +51,7 @@ A thin wrapper around the `colima` binary.
 - `disk_image(profile)` finds the sparse disk (`<config home>/_lima/<instance>/disk`, then `$LIMA_HOME`, then `~/.lima`) in allocated blocks, not apparent size.
 - `profile_config()` key/value-scans `<config home>/<profile>/colima.yaml` — not a full YAML parser, only the fields the UI needs; `template()` reads the template file and `ssh_config()` shells out to `colima ssh-config`.
 - `volume_contents(profile, root, rel, limit)` lists one volume directory over `colima ssh` in one `find -printf` pass. It stops one row past `limit` (the page the browser asked for) and returns `truncated` when there is more; the hard ceiling stays 5000 entries and 4 MiB, and only the page crosses the IPC boundary.
-- `vm_diagnostics(profile)` runs one guest script over `colima ssh` (kernel, CPU count, load, uptime, memory and swap from `/proc/meminfo`, root and inode use, Docker state, OOM kills from the kernel log) and parses `key=value` lines; a stopped VM returns `ok: false` with Colima's message, so the page explains instead of blanking.
+- `vm_diagnostics(profile)` runs one guest script over `colima ssh` (kernel, CPU count, load, uptime, memory and swap from `/proc/meminfo`, root and inode use, Docker state, OOM kills from the kernel log, and `/proc/sys/fs/binfmt_misc/rosetta`) and parses `key=value` lines; a stopped VM returns `ok: false` with Colima's message, so the page explains instead of blanking.
 - `version_check()` compares `colima version` with `abiosoft/colima`'s newest GitHub release and reports whether Homebrew can upgrade in place; `upgrade()` runs `brew upgrade colima` and refuses hand-installed binaries; `app_release_check()` does the same for this app (`dm0xa/runtime-desk`).
 - Model servers spawn `colima model serve` detached and return the PID; stopping sends `SIGTERM`.
 
@@ -64,6 +64,8 @@ The container client layer. Three process-wide values route commands: `ENDPOINT`
 `run_client(args)` gives the profile's own client one call, then one Docker attempt only on failure and only if the Docker CLI is installed, returning the client that answered. They list images differently: nerdctl shows untagged ones, while the Docker CLI from v29 hides them unless asked with `--filter dangling=true` (`-a` would add every build layer). `list_images()` tops up a Docker answer with that call, supplying the prune dialog's "Dangling images" count.
 
 `run_output()` treats a zero-exit run that printed only to stderr as a failure: that is the client printing usage over lost argv, and an empty table would claim an empty daemon.
+
+`image_platforms(ids)` answers the Images table's architecture column with one batched `image inspect`: the list format carries no platform, the inspect costs 0.8 s for 26 images, and the frontend asks again only when the set of ids changes. Ids are digest-shaped (12–64 lowercase hex, optionally `sha256:`) before they reach argv; a name or a leading dash is dropped rather than inspected.
 
 The rest is parsing and one-line wrappers, pinned with `--format` templates.
 
@@ -106,7 +108,7 @@ The three run in one `thread::scope` inside `report()`, so the page waits for th
 Host tool detection and optional integrations.
 
 - `ensure_toolchain_path()` runs once from `run()` and puts `/opt/homebrew/bin`, `/opt/homebrew/sbin`, `/usr/local/bin`, `/opt/local/bin` and `/usr/bin` ahead of the inherited `PATH`, which would otherwise hide every Homebrew CLI and gate the Docker surface off.
-- `system_status()` checks nine binaries with `which_bin()` (a `PATH` scan with an executable-bit check, not a `which` process per tool) and probes `docker compose version` separately, the Compose plugin not being a standalone binary. The nine: `colima`, `docker`, `limactl`, `nerdctl`, `compose`, `ramalama`, `krunkit`, `podman`, `kubectl`.
+- `system_status()` checks nine binaries with `which_bin()` (a `PATH` scan with an executable-bit check, not a `which` process per tool) and probes `docker compose version` separately, the Compose plugin not being a standalone binary. The nine: `colima`, `docker`, `limactl`, `nerdctl`, `compose`, `ramalama`, `krunkit`, `podman`, `kubectl`. The same answer carries `host_arch` from one `uname -m` spawn (not a tool, and excluded from `ToolKey`), because `cfg!(target_arch)` would report `x86_64` for a build running under Rosetta.
 - `compose_list()` returns an empty list when `docker compose` is missing, but a real failure otherwise, which usually means a broken installation.
 - `lima_vms()` parses NDJSON from `limactl list --json` and returns an empty list on failure: Lima is optional and must not raise a banner on every refresh.
 - `kubectl` is probed through `k8s::kubectl_installed()`, the same `which_bin()` scan.

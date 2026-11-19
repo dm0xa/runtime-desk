@@ -94,7 +94,7 @@ def pod_containers(pods: list[str]) -> list[dict]:
 
 
 BASE = {
-    "tools": ALL_TOOLS,
+    "tools": {**ALL_TOOLS, "host_arch": "arm64"},
     "profiles": [PROFILE],
     "machines": [MACHINE],
     "containers": plain_containers(3) + pod_containers(PODS),
@@ -187,9 +187,10 @@ window.__TAURI_INTERNALS__ = {
     if (%(hold)s.includes(cmd)) return new Promise(() => {});
     switch (cmd) {
       case "list_profiles_cmd": return %(profiles)s;
-      case "status_cmd": return { profile: "default", running: %(running)s, runtime: %(runtime)s, kubernetes: true };
+      case "status_cmd": return { profile: "default", running: %(running)s, runtime: %(runtime)s, kubernetes: true, arch: "aarch64" };
       case "list_containers_cmd": return %(containers)s;
-      case "list_images_cmd": return [{ id: "sha256:aaaa", repository: "nginx", tag: "1", size: "100MB", created: "2 days ago" }];
+      case "list_images_cmd": return [{ id: "5a4fbe9e1122", repository: "nginx", tag: "1", size: "100MB", created: "2 days ago" }];
+      case "image_platforms_cmd": return [{ id: "sha256:5a4fbe9e1122aabbccdd", architecture: "amd64" }];
       case "list_volumes_cmd": return [{ name: "pgdata", driver: "local", mountpoint: "/var/lib/docker/volumes/pgdata" }];
       case "list_networks_cmd": return [{ name: "bridge", driver: "bridge", scope: "local" }];
       case "network_map_cmd": return [{ id: "n1", name: "bridge", driver: "bridge", scope: "local", internal: false,
@@ -252,9 +253,10 @@ window.__TAURI_INTERNALS__ = {
       case "model_list_cmd": return { machines: [] };
       case "vm_diagnostics_cmd": return { ok: true, error: "", cpus: 4, load1: 0.4, load5: 0.3, load15: 0.2,
           mem_total: 6442450944, mem_used: 1073741824, disk_total: 64424509440, disk_used: 21474836480,
-          kernel: "6.8.0-117-generic", uptime: 200000 };
+          kernel: "6.8.0-117-generic", uptime: 200000, rosetta_active: true };
       case "app_release_cmd": return %(release)s;
-      case "version_check_cmd": case "profile_config_cmd": return null;
+      case "version_check_cmd": return null;
+      case "profile_config_cmd": return { vm_type: "vz", runtime: "docker", arch: "aarch64", mount_type: "virtiofs", cpu: 4, memory: 6, disk: 60, rosetta: true };
       case "template_cmd": case "ssh_config_cmd": case "version_cmd": return "";
       case "events_start_cmd": return "polling";
       default: return null;

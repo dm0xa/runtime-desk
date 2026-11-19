@@ -154,7 +154,7 @@ column says what the GUI exposes, not what Colima can do underneath.
 | Seamless integration | yes — purpose-built macOS services | CLI only | partial — native window and menu over the CLIs |
 | Linux machines | yes — systemd/OpenRC/runit | partial — Incus runtime only, M3+ | partial — Colima profiles; other Lima VMs read-only |
 | Isolated machines | yes — `--isolated` | no | no |
-| Rosetta x86 emulation | yes — default path | partial — `--vz-rosetta`, needs `vz` | partial — checkbox in New profile, no per-image status |
+| Rosetta x86 emulation | yes — default path | partial — `--vz-rosetta`, needs `vz` | partial — checkbox in New profile, per-image arm64/amd64 chip, guest binfmt state |
 | Optimized for Apple Silicon | yes | partial — native arm64 builds, generic Lima VM | no — ships both arches |
 | Low CPU usage | yes — ~0.1% idle | no | no — shows CPU charts, does not reduce idle cost |
 | Dynamic disk | yes — grows and shrinks | partial — sparse image, max fixed at create | partial — shows allocated vs configured; raise on restart |

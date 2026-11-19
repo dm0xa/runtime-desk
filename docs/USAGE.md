@@ -56,6 +56,8 @@ One dialog serves that menu and Settings › General's **Delete profile…**: it
 
 **+ Create new profile** below the list; fields go to `colima start`: name; CPUs, memory (GiB), disk (GiB); runtime (`docker`, `containerd`, `incus`); architecture (`aarch64`, `x86_64`); VM type (`vz`, `qemu`, `krunkit`); optional mount (`path:mode`, e.g. `~/projects:w`) and hostname; Rosetta (amd64, needs `vz`); **Kubernetes (k3s)**, about 300 MB inside the VM, plus optional `--k3s-arg` (empty keeps `--disable=traefik`).
 
+The dialog starts from this Mac's architecture. Picking the other one switches the VM type to `qemu`, because `vz` and `krunkit` boot only the host architecture, and disables Rosetta, which needs a `vz` VM with an `aarch64` guest.
+
 **Create & Start** runs `colima start` with those flags and selects the profile on success.
 
 ## Dashboard
@@ -167,7 +169,9 @@ An empty table body says which of four things happened: **List unavailable** (a 
 
 ## Images
 
-ID, repository, tag, size, creation time, **Used by**.
+ID, repository, tag, arch, size, creation time, **Used by**.
+
+- **Arch** is the image's own platform (`arm64`, `amd64`), read from one batched `image inspect`; the column sorts and reads `—` when the platform could not be read. A blue chip means the guest translates those binaries with Rosetta; an amber chip means qemu emulates them, which is much slower. The same chip sits beside a container's image reference on the Containers page.
 
 - **Used by** counts every container referencing it, running or stopped; clicking opens it in Sherlock.
 - **Investigate** opens Sherlock: tags, size, creation time, platform, layer count, entrypoint, command, working directory, user, environment variables and labels, exposed ports, declared volumes, digests, build history, and the containers using it.
@@ -259,7 +263,7 @@ Search skips logs, environment variables and file systems.
 The selected Colima VM. Header icons: **Stop profile** and **Restart profile** while running, **Start `<profile>`** while stopped.
 
 - **Diagnostics**: live health over `colima ssh` — CPU load against the vCPU count, memory, root disk, Docker daemon state, recent OOM kills — over a summary line naming any pressure signal (or none). Prints kernel, uptime, inode and swap figures and offers **Copy report**. Verdict pill: Healthy / Attention / Reading… / Unavailable / Stopped. Memory amber at 80%, red at 90%; root disk amber at 75%, red at 85%; load above 1.5× the vCPU count, any OOM kill and inodes at 90% count as pressure.
-- **VM section**: running state with **Resources…** in its header, then architecture, VM type, CPUs, memory, disk, mount type, Rosetta. Colima has no resize verb, so **Resources…** opens **Start `<profile>` with…**: `colima start` with the new values, **Start with these resources** disabled while running.
+- **VM section**: running state with **Resources…** in its header, then architecture, VM type, CPUs, memory, disk, mount type, Rosetta (with the guest's live **active** or **not registered** chip once diagnostics answer, so the config flag is not taken on faith). Colima has no resize verb, so **Resources…** opens **Start `<profile>` with…**: `colima start` with the new values, **Start with these resources** disabled while running.
 - **Container runtime**: runtime, active client (`docker CLI` or `colima nerdctl`), driver, Docker socket, containerd socket.
 - **nerdctl**: whether the host `nerdctl` client is installed; when missing, **Install nerdctl** runs `colima nerdctl install` for the profile.
 - **Linux VMs on this host**: other Lima VMs from `limactl list`; without `limactl` the page says so instead of raising an error.
@@ -415,6 +419,10 @@ Six categories, each listing what it would remove:
 Colima's own asset prune is separate: Settings → General → **Prune cached downloads…**.
 
 ## Troubleshooting
+
+### A container runs much slower than native
+
+The Images page's **Arch** column and the chip beside the container's image name say why: `amd64` on an `aarch64` VM is emulated. A blue chip means Rosetta is translating it; an amber chip means qemu is. On a `vz` profile, recreate it with **Rosetta (amd64 emulation)** checked so amd64 binaries run translated; otherwise use an image published for your architecture. Rosetta needs `vz` and an `aarch64` guest — the Machine page shows whether the guest actually registered it.
 
 ### A screen says the profile is not running
 

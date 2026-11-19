@@ -12,6 +12,7 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ### Added
 
+- **Emulation is visible, and impossible profiles are refused.** Images gain an **Arch** column — `arm64`, `amd64` — from one batched `image inspect`, with Rosetta-translated rows (blue) told apart from qemu-emulated ones (amber); the same chip marks a container's image reference. The Machine page proves Rosetta from the guest's binfmt handler instead of trusting the config flag, and **New profile** starts from this Mac's architecture, switches to `qemu` when the other one is chosen, and disables Rosetta outside an `aarch64` `vz` VM — `vz` and `krunkit` boot only the host architecture.
 - **An OrbStack comparison, with the measurements OrbStack does not publish.** [docs/ORBSTACK.md](docs/ORBSTACK.md) audits the five published benchmarks (August 2023, v0.17.0 vs Docker Desktop 4.22.0, one M1 Max), records the independent DDEV and zot24 results that do include Colima, and adds this Mac's measured Colima baseline: 7.78% of one core idle for the VM process group, 1,352 MiB resident for a 6 GiB guest, 15.89 GiB on disk, and 90 ms for `docker info`.
 
 ## 1.4.0 — 2026-11-18

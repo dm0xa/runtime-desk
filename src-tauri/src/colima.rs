@@ -729,6 +729,9 @@ pub struct VmDiagnostics {
     pub docker_active: bool,
     /// Number of "Killed process" lines in the last 500 kernel log entries.
     pub oom_kills: u64,
+    /// Rosetta's binfmt handler is registered in the guest. The profile's `rosetta: true`
+    /// only states intent; this is what makes linux/amd64 binaries run translated.
+    pub rosetta_active: bool,
 }
 
 /// One round trip: the guest answers `key=value` lines instead of the app running a
@@ -743,7 +746,8 @@ awk '/^MemTotal:/{print "mem_total_kb="$2} /^MemAvailable:/{print "mem_available
 df -k / | awk 'NR==2{print "root_total_kb="$2; print "root_used_kb="$3}'
 df -i / | awk 'NR==2{print "inodes_total="$2; print "inodes_used="$3}'
 d=$(systemctl is-active docker 2>/dev/null); echo docker=${d:-unknown}
-oom=$(journalctl -k -q --no-pager -n 500 2>/dev/null | grep -ci 'killed process'); echo oom=${oom:-0}"#;
+oom=$(journalctl -k -q --no-pager -n 500 2>/dev/null | grep -ci 'killed process'); echo oom=${oom:-0}
+rosetta=$(cat /proc/sys/fs/binfmt_misc/rosetta 2>/dev/null | head -1); echo rosetta=${rosetta}"#;
 
 fn kb(value: &str) -> u64 {
     value.trim().parse::<u64>().unwrap_or(0) * 1024
@@ -771,6 +775,7 @@ fn parse_diagnostics(raw: &str) -> VmDiagnostics {
             "inodes_used" => d.inodes_used = value.parse().unwrap_or(0),
             "docker" => d.docker_active = value == "active",
             "oom" => d.oom_kills = value.parse().unwrap_or(0),
+            "rosetta" => d.rosetta_active = value.starts_with("enabled"),
             _ => {}
         }
     }
@@ -1120,7 +1125,7 @@ mod tests {
         let raw = "kernel=6.8.0-117-generic\ncpus=4\nload1=0.07\nload5=0.32\nload15=0.32\nuptime=100280\n\
 mem_total_kb=6053356\nmem_available_kb=5324848\nswap_total_kb=0\nswap_free_kb=0\n\
 root_total_kb=19221248\nroot_used_kb=1468788\ninodes_total=2490368\ninodes_used=18192\n\
-docker=active\noom=0\n";
+docker=active\noom=0\nrosetta=enabled\n";
         let d = super::parse_diagnostics(raw);
         assert!(d.ok);
         assert_eq!(d.kernel, "6.8.0-117-generic");
@@ -1132,6 +1137,7 @@ docker=active\noom=0\n";
         assert!(d.docker_active);
         assert_eq!(d.oom_kills, 0);
         assert_eq!(d.load1, 0.07);
+        assert!(d.rosetta_active);
     }
 
     #[test]
@@ -1140,6 +1146,7 @@ docker=active\noom=0\n";
         assert_eq!(d.mem_total, 0);
         assert!(!d.docker_active);
         assert_eq!(d.oom_kills, 3);
+        assert!(!d.rosetta_active);
     }
 
     #[test]

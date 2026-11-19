@@ -101,6 +101,24 @@ fn compose_installed() -> bool {
         .any(|plugin| executable(&plugin))
 }
 
+/// The host's architecture, not the container VM's. `uname -m` answers `arm64` even for a
+/// process running under Rosetta, where `cfg!(target_arch)` would say x86_64 and every
+/// vz/krunkit suggestion would be backwards. One spawn for the life of the app.
+static HOST_ARCH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    Command::new("uname")
+        .arg("-m")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::consts::ARCH.to_string())
+});
+
+fn host_arch() -> String {
+    HOST_ARCH.clone()
+}
+
 #[derive(Serialize, Default)]
 pub struct SystemStatus {
     pub colima: bool,
@@ -112,6 +130,8 @@ pub struct SystemStatus {
     pub krunkit: bool,
     pub podman: bool,
     pub kubectl: bool,
+    /// `arm64` or `x86_64`: the host decides which VM types can boot natively.
+    pub host_arch: String,
 }
 
 pub fn system_status() -> SystemStatus {
@@ -128,6 +148,7 @@ pub fn system_status() -> SystemStatus {
         // Colima itself shells out to kubectl while provisioning the cluster, so a Kubernetes
         // surface without it could neither read nor create one.
         kubectl: crate::k8s::kubectl_installed(),
+        host_arch: host_arch(),
     }
 }
 

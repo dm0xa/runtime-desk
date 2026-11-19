@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
-import type { AppRelease, CleanupReport, ComposeProject, Container, Counts, DiskUsage, Image, LimaVm, Network, NetworkMapEntry, PodmanContainer, PodmanDiskUsage, PodmanImage, PodmanMachine, PodmanNetwork, PodmanVolume, Profile, ProfileConfig, Status, SystemStatus, VersionInfo, VmDiagnostics, Volume, VolumeSize } from "./types";
+import type { AppRelease, CleanupReport, ComposeProject, Container, Counts, DiskUsage, Image, ImagePlatform, LimaVm, Network, NetworkMapEntry, PodmanContainer, PodmanDiskUsage, PodmanImage, PodmanMachine, PodmanNetwork, PodmanVolume, Profile, ProfileConfig, Status, SystemStatus, VersionInfo, VmDiagnostics, Volume, VolumeSize } from "./types";
 import { fmtBytes, fmtDateTime, fmtSize, fmtUptime, parseHumanBytes } from "./lib/format";
 import { OriginBadge, isKubernetesContainer, isKubernetesName, originOf } from "./lib/origin";
 import { overlayOpen } from "./lib/modalFocus";
@@ -269,6 +269,16 @@ const blankForm = {
   vm_type: "vz", rosetta: false, mount: "", hostname: "", kubernetes: false, k3s_arg: "",
 };
 
+/** Colima spells architectures `aarch64`/`x86_64`; image and host metadata says `arm64`/`amd64`.
+ *  One normaliser so an amd64 image on an aarch64 VM is not read as a difference of spelling. */
+function normalizeArch(value?: string | null): "arm64" | "amd64" | "" {
+  switch (value) {
+    case "arm64": case "aarch64": return "arm64";
+    case "amd64": case "x86_64": return "amd64";
+    default: return "";
+  }
+}
+
 function App() {
   // The window reopens on the screen you left, like every Mac app that remembers its
   // state; a screen whose CLI disappeared now lands on its own "not installed" panel.
@@ -288,6 +298,10 @@ function App() {
   const [version, setVersion] = useState("");
   const [containers, setContainers] = useState<Container[]>([]);
   const [images, setImages] = useState<Image[]>([]);
+  /** Image id (short or full digest) → architecture, from one batched `image inspect`. */
+  const [imageArch, setImageArch] = useState<Record<string, string>>({});
+  /** The id set the last inspect answered for; a refresh with the same images does not re-run it. */
+  const imageIdsRef = useRef("");
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [volSizes, setVolSizes] = useState<VolumeSize[]>([]);
   const [volSizesLoading, setVolSizesLoading] = useState(false);
@@ -856,6 +870,19 @@ function App() {
   const [serveList, setServeList] = useState<[string, number][]>([]);
   const [ai, setAi] = useState({ registry: "docker" as "docker" | "hf" | "ollama", name: "gemma3", prompt: "", runner: "docker" as "docker" | "ramalama", port: 8080 });
 
+  /** `uname -m` as the backend reports it; empty until the first tool probe. */
+  const hostArch = normalizeArch(tools?.host_arch);
+  /** vz and krunkit boot only the host architecture, so a new profile starts from it. */
+  function openCreate() {
+    setForm({ ...blankForm, arch: hostArch === "amd64" ? "x86_64" : "aarch64" });
+    setShowCreate(true);
+  }
+  const openCreateRef = useRef(openCreate);
+  openCreateRef.current = openCreate;
+  /** vz and krunkit cannot boot the other architecture; qemu is the only cross-arch VM type. */
+  const createArch = normalizeArch(form.arch);
+  const crossArch = !!hostArch && !!createArch && createArch !== hostArch;
+
   imagesRef.current = images;
   containersRef.current = containers;
 
@@ -911,6 +938,34 @@ function App() {
   async function activateProfile(name: string, list: Profile[] = profiles) {
     const runtime = list.find((p) => p.name === name)?.runtime ?? null;
     return safe(invoke<string>("set_profile_cmd", { profile: name, runtime }), "");
+  }
+  /** One batched `image inspect` tells the Images table which rows run emulated. `docker
+   *  image ls` carries no platform, and inspecting costs 0.8 s for 26 images, so the call is
+   *  skipped while the set of image ids is unchanged. Decorative: a refusal leaves the column
+   *  at `—` and raises no notice. */
+  async function readImageArch(list: Image[], gen: number) {
+    const ids = [...new Set(list.map((i) => i.id.replace(/^sha256:/, "")).filter((id) => /^[0-9a-f]{12,64}$/.test(id)))];
+    const key = ids.slice().sort().join(",");
+    if (key === imageIdsRef.current) return;
+    if (ids.length === 0) {
+      imageIdsRef.current = "";
+      setImageArch({});
+      return;
+    }
+    try {
+      const platforms = await invoke<ImagePlatform[]>("image_platforms_cmd", { ids });
+      if (gen !== refreshGen.current) return;
+      const map: Record<string, string> = {};
+      for (const p of platforms) {
+        const full = p.id.replace(/^sha256:/, "");
+        map[full] = p.architecture;
+        map[full.slice(0, 12)] = p.architecture;
+      }
+      imageIdsRef.current = key;
+      setImageArch(map);
+    } catch {
+      // Retry on the next wave: the ids are still unanswered, so the key was never stored.
+    }
   }
   /** The container lists this profile's daemon answers, read as one wave.
    *  `quiet` keeps a speculative read from raising notices: the caller started it on the
@@ -1044,6 +1099,7 @@ function App() {
       const { c, i, vol, net, cmp, failed } = docker ? await docker : await readDocker();
       if (!live()) return;
       setContainers(c); setImages(i); setVolumes(vol); setNetworks(net); setCompose(cmp);
+      void readImageArch(i, gen);
       // Counts come from the lists already in hand; a second set of docker list
       // calls for the same numbers was the most expensive part of a refresh.
       setCounts({
@@ -1058,6 +1114,8 @@ function App() {
       void readDisk(gen);
     } else {
       setContainers([]); setImages([]); setVolumes([]); setNetworks([]); setCompose([]);
+      setImageArch({});
+      imageIdsRef.current = "";
       setCounts({ containers: 0, running: 0, images: 0, volumes: 0 });
       setListsFailed(false);
       setCountsRead(false);
@@ -1307,7 +1365,7 @@ function App() {
         case "refresh": void pageRefreshRef.current(); break;
         case "search": window.dispatchEvent(new Event("colima:search")); break;
         case "toggle-sidebar": setSidebarHidden((hidden) => !hidden); break;
-        case "new-profile": setForm({ ...blankForm }); setShowCreate(true); break;
+        case "new-profile": openCreateRef.current(); break;
         case "shortcuts": setShowHelp(true); break;
         case "docs": openUrl(`${REPO_URL}/blob/main/docs/USAGE.md`, "Opened usage guide"); break;
         case "issue": openUrl(`${REPO_URL}/issues/new`, "Opened issue form"); break;
@@ -1408,11 +1466,51 @@ function App() {
       case "id": return i.id;
       case "repository": return i.repository;
       case "tag": return i.tag;
+      case "arch": return imageArch[i.id] ?? imageArch[i.id.replace(/^sha256:/, "")] ?? "";
       case "size": return i.size;
       case "created": return i.created;
       default: return "";
     }
   }
+  /** The selected profile's guest architecture, from whichever read answered first. */
+  const guestArch = normalizeArch(status?.arch ?? cfg?.arch ?? profiles.find((p) => p.name === selected)?.arch);
+  /** Rosetta exists only in a vz VM; the config flag is the promise, diagnostics prove it. */
+  const rosettaOn = cfg?.vm_type === "vz" && cfg.rosetta;
+  /** `Container.image` is a tag, an id, or a `sha256:` digest; one map answers all three. */
+  const imageByRef = useMemo(() => {
+    const map = new Map<string, Image>();
+    for (const i of images) {
+      const short = i.id.replace(/^sha256:/, "");
+      map.set(`${i.repository}:${i.tag}`, i);
+      map.set(i.id, i);
+      map.set(short, i);
+      map.set(short.slice(0, 12), i);
+    }
+    return map;
+  }, [images]);
+  const imageForRef = (ref: string) => {
+    const short = ref.replace(/^sha256:/, "");
+    return imageByRef.get(ref) ?? imageByRef.get(short) ?? imageByRef.get(short.slice(0, 12));
+  };
+  /** Null when the platform was not read; the table renders `—` rather than a guess. */
+  const imageArchInfo = (img?: Image): { label: string; tone: "native" | "rosetta" | "emulated"; title: string } | null => {
+    const raw = img ? imageArch[img.id] ?? imageArch[img.id.replace(/^sha256:/, "")] ?? "" : "";
+    const arch = normalizeArch(raw);
+    if (!arch) return null;
+    if (!guestArch || arch === guestArch) {
+      return { label: raw, tone: "native", title: guestArch ? `Built for this profile's ${raw} VM` : `Built for ${raw}` };
+    }
+    const translated = arch === "amd64" && guestArch === "arm64" && rosettaOn;
+    return {
+      label: raw,
+      tone: translated ? "rosetta" : "emulated",
+      title: translated
+        ? "Translated by Rosetta: linux/amd64 binaries run at near-native speed"
+        : `Emulated: this ${guestArch} VM runs it through qemu. ${guestArch === "arm64" && arch === "amd64"
+          ? "A vz profile with Rosetta, or an arm64 image, removes the translation."
+          : "An image built for the profile's architecture removes the translation."}`,
+    };
+  };
   const volSizeByName = useMemo(() => new Map(volSizes.map((v) => [v.name, v.size])), [volSizes]);
   function volumeVal(v: Volume, k: string): string | number {
     switch (k) {
@@ -1468,7 +1566,7 @@ function App() {
       <tr onClick={(e) => { if ((e.target as Element).closest("button, .menu-trigger")) return; toggleRow(c.id); }} style={{ cursor: "pointer" }}>
         <td><span className={`status-badge ${c.state === "running" ? "running" : "stopped"}`}><span className="dot" />{c.state}</span></td>
         {showOrigin && <td><OriginBadge c={c} /></td>}
-        <td style={{ fontWeight: 600 }} title={c.name}><Caret open={expandedRow === c.id} />{isKubernetesContainer(c) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster, not by you">k8s</span>}{c.name}<TagBadges kind="container" id={c.id} /></td><td title={c.image}>{c.image}</td><td style={{ color: "var(--muted)" }} title={c.status}>{c.status}</td><td className="ports-cell"><PortChips ports={c.ports} /></td>
+        <td style={{ fontWeight: 600 }} title={c.name}><Caret open={expandedRow === c.id} />{isKubernetesContainer(c) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster, not by you">k8s</span>}{c.name}<TagBadges kind="container" id={c.id} /></td><td title={c.image}>{c.image}{(() => { const a = imageArchInfo(imageForRef(c.image)); return a && a.tone !== "native" ? <span className={`arch-chip ${a.tone}`} title={a.title}>{a.label}</span> : null; })()}</td><td style={{ color: "var(--muted)" }} title={c.status}>{c.status}</td><td className="ports-cell"><PortChips ports={c.ports} /></td>
         <td>
           <div className="actions">
             <button
@@ -1713,7 +1811,7 @@ function App() {
     tools, running, selected, chooseProfile, visible, openContainers,
     countsRead, listsFailed, profilesRead,
     startSelectedOrCreate: () => {
-      if (profiles.length === 0) { setForm({ ...blankForm }); setShowCreate(true); return; }
+      if (profiles.length === 0) { openCreate(); return; }
       void act(() => invoke("start_cmd", { opts: { profile: selected } }));
     },
     openSubject, openSettings,
@@ -1759,6 +1857,7 @@ function App() {
   const diagIssues: string[] = [];
   if (diag?.ok) {
     if (!diag.docker_active) diagIssues.push("Docker daemon is not running");
+    if (cfg?.rosetta && !diag.rosetta_active) diagIssues.push("Rosetta is configured but not active in the guest");
     if (diag.oom_kills > 0) diagIssues.push(`${diag.oom_kills} OOM kill${diag.oom_kills === 1 ? "" : "s"} in the recent kernel log`);
     if (memPct >= 90) diagIssues.push(`memory at ${memPct}%`);
     if (diskPct >= 85) diagIssues.push(`disk at ${diskPct}%`);
@@ -1780,6 +1879,7 @@ function App() {
       `inodes    ${inodePct}% — ${diag.inodes_used} of ${diag.inodes_total}`,
       `swap      ${diag.swap_total ? `${fmtBytes(diag.swap_total - diag.swap_free)} used of ${fmtBytes(diag.swap_total)}` : "off"}`,
       `docker    ${diag.docker_active ? "active" : "inactive"} · ${diag.oom_kills} OOM kills`,
+      `rosetta   ${diag.rosetta_active ? "active" : "not registered"}`,
       diagIssues.length ? `issues    ${diagIssues.join("; ")}` : "issues    none",
     ].join("\n");
     if (await copyText(report)) {
@@ -1983,7 +2083,7 @@ function App() {
                 );
               })}
             </div>
-            <button className="btn ghost side-create" onClick={() => { setForm({ ...blankForm }); setShowCreate(true); }}>+ Create new profile</button>
+            <button className="btn ghost side-create" onClick={openCreate}>+ Create new profile</button>
           </div>
         </aside>
         <div className="content">
@@ -2019,7 +2119,7 @@ function App() {
               </p>
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 {profiles.length === 0 ? (
-                  <button className="btn primary" onClick={() => { setForm({ ...blankForm }); setShowCreate(true); }}>New profile…</button>
+                  <button className="btn primary" onClick={openCreate}>New profile…</button>
                 ) : (
                   <button className="btn primary" disabled={busy} onClick={() => void act(() => invoke("start_cmd", { opts: { profile: selected } }))}>Start profile</button>
                 )}
@@ -2332,25 +2432,29 @@ function App() {
                 <span className="muted list-hint">An unused image is not referenced by any container; it is still on disk until pruned.</span>
               </div>
               <div className="table-wrap">
-                <table className="table table-images">
+                <table className="table table-images has-arch">
                   <colgroup>
                     <col className="col-id" />
                     <col className="col-repository" />
                     <col className="col-tag" />
+                    <col className="col-arch" />
                     <col className="col-size" />
                     <col className="col-created" />
                     <col className="col-used" />
                     <col className="col-actions" />
                   </colgroup>
-                  <thead><tr><SortTh table="images" k="id">ID</SortTh><SortTh table="images" k="repository">Repository</SortTh><SortTh table="images" k="tag">Tag</SortTh><SortTh table="images" k="size">Size</SortTh><SortTh table="images" k="created">Created</SortTh><th>Used by</th><th>Actions</th></tr></thead>
+                  <thead><tr><SortTh table="images" k="id">ID</SortTh><SortTh table="images" k="repository">Repository</SortTh><SortTh table="images" k="tag">Tag</SortTh><SortTh table="images" k="arch">Arch</SortTh><SortTh table="images" k="size">Size</SortTh><SortTh table="images" k="created">Created</SortTh><th>Used by</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {filteredImages.length === 0 && <tr><td colSpan={7} className="empty">{emptyRow("images")}</td></tr>}
+                    {filteredImages.length === 0 && <tr><td colSpan={8} className="empty">{emptyRow("images")}</td></tr>}
                     {filteredImages.map((i) => {
                       const used = containersUsingImage(i);
+                      const arch = imageArchInfo(i);
                       return (
                       <Fragment key={`${i.id}-${i.repository}-${i.tag}`}>
                       <tr onClick={(e) => { if ((e.target as Element).closest("button")) return; toggleRow(`${i.id}-${i.tag}`); }} style={{ cursor: "pointer" }}>
-                        <td className="cell-id" title={i.id}>{i.id}</td><td style={{ fontWeight: 600 }} title={i.repository}><Caret open={expandedRow === `${i.id}-${i.tag}`} />{i.repository}</td><td>{i.tag}</td><td>{parseHumanBytes(i.size) ? fmtSize(parseHumanBytes(i.size)) : i.size}</td><td style={{ color: "var(--muted)" }}>{i.created}</td>
+                        <td className="cell-id" title={i.id}>{i.id}</td><td style={{ fontWeight: 600 }} title={i.repository}><Caret open={expandedRow === `${i.id}-${i.tag}`} />{i.repository}</td><td>{i.tag}</td>
+                        <td>{arch ? <span className={`arch-chip ${arch.tone}`} title={arch.title}>{arch.label}</span> : <span className="muted">—</span>}</td>
+                        <td>{parseHumanBytes(i.size) ? fmtSize(parseHumanBytes(i.size)) : i.size}</td><td style={{ color: "var(--muted)" }}>{i.created}</td>
                         <td>
                           {used.length === 0 ? <span className="muted">—</span> : (
                             <button className="icon-btn" title={`Used by ${used.map((c) => c.name).join(", ")}`} onClick={() => openSubject({ kind: "image", id: i.id })}>
@@ -2362,12 +2466,13 @@ function App() {
                       </tr>
                       {expandedRow === `${i.id}-${i.tag}` && (
                         <tr className="detail-row">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="row-detail">
                               <div className="detail-grid">
                                 <div className="detail-item"><span>Image ID</span><code>{i.id}</code></div>
                                 <div className="detail-item"><span>Repository</span><code>{i.repository}</code></div>
                                 <div className="detail-item"><span>Tag</span><div>{i.tag}</div></div>
+                                <div className="detail-item"><span>Architecture</span><div>{arch ? <span className={`arch-chip ${arch.tone}`} title={arch.title}>{arch.label}</span> : "—"}</div></div>
                                 <div className="detail-item"><span>Size</span><div>{i.size}</div></div>
                                 <div className="detail-item"><span>Created</span><div>{i.created}</div></div>
                               </div>
@@ -2720,7 +2825,7 @@ function App() {
                 a VM needs one; nothing was queried.
               </p>
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button className="btn primary" onClick={() => { setForm({ ...blankForm }); setShowCreate(true); }}>New profile…</button>
+                <button className="btn primary" onClick={openCreate}>New profile…</button>
                 <button className="btn ghost" onClick={() => void refresh()}>Recheck</button>
               </div>
             </div>
@@ -2810,7 +2915,14 @@ function App() {
                   <div className="kv"><span>Memory</span><strong>{status?.memory ? fmtBytes(status.memory) : cfg?.memory ? `${cfg.memory} GiB` : "—"}</strong></div>
                   <div className="kv"><span>Disk</span><strong>{status?.disk ? fmtBytes(status.disk) : cfg?.disk ? `${cfg.disk} GiB` : "—"}</strong></div>
                   <div className="kv"><span>Mount</span><strong>{status?.mount_type ?? cfg?.mount_type ?? "—"}</strong></div>
-                  <div className="kv"><span>Rosetta</span><strong>{cfg ? (cfg.rosetta ? "enabled" : "off") : "—"}</strong></div>
+                  <div className="kv"><span>Rosetta</span><strong>{cfg ? (cfg.rosetta ? "enabled" : "off") : "—"}{diag?.ok && (diag.rosetta_active || cfg?.rosetta) && (
+                    <span
+                      className={`arch-chip ${diag.rosetta_active ? "rosetta" : "emulated"}`}
+                      title={diag.rosetta_active
+                        ? "The guest registered Rosetta's binfmt handler: linux/amd64 binaries run translated"
+                        : "The profile asks for Rosetta but the guest never registered it; recreate the VM with Rosetta enabled"}
+                    >{diag.rosetta_active ? "active" : "not registered"}</span>
+                  )}</strong></div>
                 </section>
 
                 <section className="panel">
@@ -3504,16 +3616,24 @@ function App() {
             </div>
             <div className="row2">
               <div className="field"><label>Runtime</label><Select label="Runtime" minWidth={0} value={form.runtime} options={[{ value: "docker", label: "docker" }, { value: "containerd", label: "containerd" }, { value: "incus", label: "incus" }]} onChange={(v) => setForm({ ...form, runtime: v })} /></div>
-              <div className="field"><label>Arch</label><Select label="Architecture" minWidth={0} value={form.arch} options={[{ value: "aarch64", label: "aarch64" }, { value: "x86_64", label: "x86_64" }]} onChange={(v) => setForm({ ...form, arch: v })} /></div>
+              <div className="field"><label>Arch</label><Select label="Architecture" minWidth={0} value={form.arch} options={[{ value: "aarch64", label: "aarch64" }, { value: "x86_64", label: "x86_64" }]} onChange={(v) => {
+                const cross = !!hostArch && normalizeArch(v) !== hostArch;
+                setForm({ ...form, arch: v, vm_type: cross ? "qemu" : form.vm_type, rosetta: cross ? false : form.rosetta });
+              }} /></div>
               <div className="field"><label>VM type</label><Select label="VM type" minWidth={0} value={form.vm_type} options={[{ value: "vz", label: "vz" }, { value: "qemu", label: "qemu" }, { value: "krunkit", label: "krunkit" }]} onChange={(v) => setForm({ ...form, vm_type: v, rosetta: v === "vz" ? form.rosetta : false })} /></div>
             </div>
+            {crossArch && (
+              <div className="field-hint bad">
+                This Mac is {hostArch}. vz and krunkit boot only the host architecture, so an {form.arch} VM needs qemu.
+              </div>
+            )}
             <div className="field">
               <label>Mount (optional)</label>
               <input value={form.mount} autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" aria-label="Mount path and mode" onChange={(e) => setForm({ ...form, mount: e.target.value })} placeholder="~/projects:w" />
               <div className="field-hint">path:mode — <code>~/projects:w</code> is writable, <code>:ro</code> read-only.</div>
             </div>
             <div className="field"><label>Hostname (optional)</label><input value={form.hostname} autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" aria-label="Hostname" onChange={(e) => setForm({ ...form, hostname: e.target.value })} /></div>
-            <div className="field"><label className="check" title={form.vm_type === "vz" ? "Runs linux/amd64 images through Rosetta" : "Rosetta needs a vz VM"}><input type="checkbox" disabled={form.vm_type !== "vz"} checked={form.rosetta} onChange={(e) => setForm({ ...form, rosetta: e.target.checked })} /> Rosetta (amd64 emulation){form.vm_type !== "vz" && <span className="muted"> — needs vz</span>}</label></div>
+            <div className="field"><label className="check" title={form.vm_type === "vz" && normalizeArch(form.arch) === "arm64" ? "Runs linux/amd64 images through Rosetta" : "Rosetta translates amd64 binaries inside an arm64 vz VM"}><input type="checkbox" disabled={form.vm_type !== "vz" || normalizeArch(form.arch) !== "arm64"} checked={form.rosetta} onChange={(e) => setForm({ ...form, rosetta: e.target.checked })} /> Rosetta (amd64 emulation){form.vm_type !== "vz" ? <span className="muted"> — needs vz</span> : normalizeArch(form.arch) !== "arm64" ? <span className="muted"> — needs an arm64 VM</span> : null}</label></div>
             <div className="field">
               <label className="check" title="Provisions Colima's single-node k3s in this VM and points your kubeconfig at it"><input type="checkbox" checked={form.kubernetes} onChange={(e) => setForm({ ...form, kubernetes: e.target.checked })} /> Kubernetes (k3s)</label>
               <div className="field-hint">Adds about 300&nbsp;MB inside the VM. A profile created without it can enable Kubernetes later from the Kubernetes page.</div>
@@ -3527,7 +3647,7 @@ function App() {
             )}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button className="btn ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-              <button className="btn primary" disabled={busy || !form.profile} onClick={() => act(async () => {
+              <button className="btn primary" disabled={busy || !form.profile || (crossArch && form.vm_type !== "qemu")} onClick={() => act(async () => {
                 await invoke("start_cmd", { opts: { ...form, profile: form.profile } });
                 // The new VM is the one the lists must read: point the client at it before the
                 // selection changes, or every list keeps answering from the previous socket.

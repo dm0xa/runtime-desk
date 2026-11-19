@@ -502,6 +502,7 @@ code { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; }.logo
 @media (max-width: 1000px) {
   .ai-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .table-images { min-width: 940px; }
+  .table-images.has-arch { min-width: 1032px; }
   .table-volumes { min-width: 860px; }
   .table-networks { min-width: 760px; }
   .table-podman-machines { min-width: 820px; }
@@ -512,6 +513,27 @@ code { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; }.logo
 .prereq.ok::before { background: currentColor; border-color: currentColor; }
 .prereq.bad { color: var(--muted); background: var(--panel-2); }
 .prereq.bad::before { background: transparent; }
+
+/* Architecture chips: native is quiet, Rosetta is a win, emulation is the cost. */
+.arch-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600; line-height: 1;
+  padding: 3px 6px; border-radius: 6px;
+  color: var(--muted); background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--sep);
+}
+.arch-chip.rosetta {
+  color: var(--blue-text);
+  background: color-mix(in srgb, #3b82f6 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #3b82f6 30%, transparent);
+}
+.arch-chip.emulated {
+  color: var(--amber-text);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 30%, transparent);
+}
+.table-containers .arch-chip { margin-left: 7px; }
+.kv strong .arch-chip { margin-left: 7px; }
 
 .dash-main { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 12px; margin-top: 12px; align-items: start; }
 .dash-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -708,6 +730,7 @@ pre, pre *, code, input, textarea, .table td, .kv, .logs {
 
 .table-images col.col-id { width: 118px; }
 .table-images col.col-tag { width: 110px; }
+.table-images col.col-arch { width: 92px; }
 .table-images col.col-size { width: 88px; }
 .table-images col.col-created { width: 126px; }
 .table-images col.col-used { width: 112px; }

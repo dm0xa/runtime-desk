@@ -33,6 +33,8 @@ export type Container = {
 };
 
 export type Image = { id: string; repository: string; tag: string; size: string; created: string };
+/** One image's platform from a batched `image inspect`; the id is the full `sha256:` digest. */
+export type ImagePlatform = { id: string; architecture: string };
 export type Volume = { name: string; driver: string; mountpoint: string };
 export type Network = { name: string; driver: string; scope: string };
 export type SystemStatus = {
@@ -45,6 +47,8 @@ export type SystemStatus = {
   krunkit: boolean;
   podman: boolean;
   kubectl: boolean;
+  /** The host's `uname -m` (`arm64` or `x86_64`); decides which VM types can boot natively. */
+  host_arch?: string;
 };
 /** What `kubectl` reports about the profile's cluster; `enabled: false` means the profile was
  *  started without Kubernetes rather than something being broken. */
@@ -222,6 +226,8 @@ export type VmDiagnostics = {
   inodes_used: number;
   docker_active: boolean;
   oom_kills: number;
+  /** Rosetta's binfmt handler is registered in the guest, not merely configured. */
+  rosetta_active: boolean;
 };
 
 export type VersionInfo = {

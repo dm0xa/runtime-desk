@@ -305,6 +305,11 @@ async fn list_containers_cmd() -> R<Vec<docker::Container>> { blocking(docker::l
 async fn list_images_cmd() -> R<Vec<docker::Image>> { blocking(docker::list_images).await }
 
 #[tauri::command]
+async fn image_platforms_cmd(ids: Vec<String>) -> R<Vec<docker::ImagePlatform>> {
+    blocking(move || docker::image_platforms(&ids)).await
+}
+
+#[tauri::command]
 async fn list_volumes_cmd() -> R<Vec<docker::Volume>> { blocking(docker::list_volumes).await }
 
 #[tauri::command]
@@ -904,7 +909,7 @@ pub fn run() {
             model_run_cmd, prune_cmd, update_cmd, nerdctl_install_cmd,
             profile_config_cmd, model_list_cmd, model_pull_cmd, model_setup_cmd, model_chat_cmd,
             model_serve_start_cmd, model_serve_stop_cmd, model_serve_status_cmd, open_url_cmd,
-            list_containers_cmd, list_images_cmd, list_volumes_cmd, list_networks_cmd, container_action_cmd, container_logs_cmd, container_detail_cmd, image_detail_cmd, volume_detail_cmd, volume_sizes_cmd, volume_contents_cmd, container_stats_cmd, container_stats_one_cmd, container_update_memory_cmd, network_map_cmd, network_detail_cmd,
+            list_containers_cmd, list_images_cmd, image_platforms_cmd, list_volumes_cmd, list_networks_cmd, container_action_cmd, container_logs_cmd, container_detail_cmd, image_detail_cmd, volume_detail_cmd, volume_sizes_cmd, volume_contents_cmd, container_stats_cmd, container_stats_one_cmd, container_update_memory_cmd, network_map_cmd, network_detail_cmd,
             inspect_cmd, image_pull_cmd, image_remove_cmd, volume_remove_cmd, network_remove_cmd, docker_prune_cmd, disk_usage_cmd, cleanup_report_cmd,
             system_status_cmd, set_profile_cmd, compose_list_cmd, lima_vms_cmd,
             version_check_cmd, app_release_cmd, upgrade_cmd, vm_diagnostics_cmd,

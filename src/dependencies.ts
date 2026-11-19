@@ -11,7 +11,7 @@ import type { SystemStatus } from "./types";
  *  - While `tools` is still null (before the first probe) nothing is hidden: no flicker.
  */
 
-export type ToolKey = keyof SystemStatus;
+export type ToolKey = Exclude<keyof SystemStatus, "host_arch">;
 
 export type ToolInfo = {
   /** Human name used in settings and gated views. */
