@@ -6,17 +6,19 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.5.0 — 2026-11-19
+
 ### Changed
 
-- **`colima status` is read once per profile, not after every action.** Its answer costs 1.3 s and cannot change while the profile runs — sizing only moves on a start or restart — so the cache now keeps one entry per profile for five minutes and every profile mutation still clears it. Removing a container no longer waits on a re-read of the socket path.
+- **`colima status` is read once per profile.** It costs 1.3 s and cannot change while the profile runs, so it is cached for five minutes and cleared by every profile change. Removing a container no longer waits on it.
 
 ### Added
 
-- **Networking, mounts and SSH-agent are controls, not YAML edits.** **New profile** gains shared/bridged mode, a host interface, a reachable IP, DNS resolvers and hosts, the gateway, and `ssh`/`grpc`/`none` port forwarding (`grpc` is the one that carries UDP); plus mount type, a mounts list, inotify propagation and SSH-agent forwarding. Machine gains a **Network** panel, with **Change…** for the fields `colima start` can still apply on a stopped profile. Invalid input — a gateway not ending in `.2`, a non-IP resolver, `virtiofs` outside `vz`, a mount that starts with `-`, contains a comma or a space, or carries a suffix Colima does not read — is refused before the CLI runs.
-- **Recreate… for fields Colima reads only at creation.** Architecture, VM type, runtime, mount type, network mode and the reachable IP are fixed after the first boot, so Machine can now delete the profile (Colima tears down a running VM) and start it again with the settings this app exposes; hand-edited keys it does not edit go back to their defaults. **Keep images and containers** leaves the runtime disk in place; **Delete them — a fresh VM** adds `--data`; the profile name must be typed.
-- **A menu-bar item.** The selected profile and its state, with **Start**, **Stop**, **Show Runtime Desk** and **Quit**. Start and Stop forward to the window, so busy state, notices and the refresh path are the same ones every other action uses. Closing the window still quits.
-- **Emulation is visible, and impossible profiles are refused.** Images gain an **Arch** column — `arm64`, `amd64` — from one batched `image inspect`, with Rosetta-translated rows (blue) told apart from qemu-emulated ones (amber); the same chip marks a container's image reference. The Machine page proves Rosetta from the guest's binfmt handler instead of trusting the config flag, and **New profile** starts from this Mac's architecture, switches to `qemu` when the other one is chosen, and disables Rosetta outside an `aarch64` `vz` VM — `vz` and `krunkit` boot only the host architecture.
-- **An OrbStack comparison, with the measurements OrbStack does not publish.** [docs/ORBSTACK.md](docs/ORBSTACK.md) audits the five published benchmarks (August 2023, v0.17.0 vs Docker Desktop 4.22.0, one M1 Max), records the independent DDEV and zot24 results that do include Colima, and adds this Mac's measured Colima baseline: 7.78% of one core idle for the VM process group, 1,352 MiB resident for a 6 GiB guest, 15.89 GiB on disk, and 90 ms for `docker info`.
+- **Networking, mounts and SSH-agent are controls, not YAML edits.** **New profile** sets network mode, interface, IP, DNS, gateway, port forwarding, mount type, mounts, inotify and SSH-agent; Machine shows a **Network** panel with **Change…**. Bad values are refused before the CLI runs.
+- **Recreate a profile for settings Colima reads only once.** Architecture, VM type, runtime, mount type and network are fixed at creation, so Machine can delete and start the profile again — keeping or deleting images and data — with the settings this app exposes.
+- **A menu-bar item.** The selected profile and its state, with **Start**, **Stop**, **Show Runtime Desk** and **Quit**, sharing the window's busy state and notices.
+- **Emulation is visible, and impossible profiles are refused.** Images gain an **Arch** column that tells Rosetta-translated rows from qemu-emulated ones, Machine proves Rosetta from the guest, and **New profile** starts from this Mac's architecture.
+- **An OrbStack comparison.** [docs/ORBSTACK.md](docs/ORBSTACK.md) audits OrbStack's published benchmarks and adds this Mac's measured Colima baseline.
 
 ## 1.4.0 — 2026-11-18
 
