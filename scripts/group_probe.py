@@ -193,6 +193,8 @@ STATS = [
     {"id": "c-worker", "name": "shopstack-worker-1", "cpu": 2.1, "mem": 210 * MIB, "mem_limit": 0, "mem_pct": 0},
     {"id": "c-db", "name": "shopstack-db-1", "cpu": 3.3, "mem": 380 * MIB, "mem_limit": 1024 * MIB, "mem_pct": 37.1},
     {"id": "c-redis", "name": "shopstack-redis-1", "cpu": 0.2, "mem": 28 * MIB, "mem_limit": 0, "mem_pct": 0},
+    # Not part of the project: the daemon's memory is not all this project's.
+    {"id": "c-solo", "name": "scratch", "cpu": 0.1, "mem": 60 * MIB, "mem_limit": 0, "mem_pct": 0},
 ]
 
 STATUS = {"profile": "default", "running": True, "runtime": "docker", "kubernetes": False, "arch": "aarch64"}
@@ -263,7 +265,7 @@ window.__TAURI_INTERNALS__ = {
           tick += 1;
           for (const s of DATA.stats) {
             ch.onmessage(JSON.stringify({ ...s, pids: 8, net_rx: 4096 * tick, net_tx: 1024 * tick,
-              block_read: 8192, block_write: 4096 }));
+              block_read: 8192 * tick, block_write: 4096 * tick }));
           }
         };
         emit();

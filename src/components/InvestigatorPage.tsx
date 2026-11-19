@@ -365,6 +365,8 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
       mem: recorded.mem,
       rx: rateSeries(recorded.netRx),
       tx: rateSeries(recorded.netTx),
+      read: rateSeries(recorded.blkRead),
+      write: rateSeries(recorded.blkWrite),
     };
   });
   // Rank by the window's CPU peak, not by the instant: a container between spikes keeps its
@@ -390,6 +392,13 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
   const rx = series.reduce((n, d) => n + (d.rx[d.rx.length - 1] ?? 0), 0);
   const tx = series.reduce((n, d) => n + (d.tx[d.tx.length - 1] ?? 0), 0);
   const txTotal = sumAligned(ranked.map((d) => d.tx));
+  /** Project-wide disk and process cost: the same facts the container page carries, summed. */
+  const readNow = series.reduce((n, d) => n + (d.read[d.read.length - 1] ?? 0), 0);
+  const writeNow = series.reduce((n, d) => n + (d.write[d.write.length - 1] ?? 0), 0);
+  const pids = running.reduce((n, m) => n + (statByMember.get(m.id)?.pids ?? 0), 0);
+  /** Memory the rest of the daemon holds: the project is only one tenant of the VM. */
+  const allMem = snap.stats.reduce((n, s) => n + s.mem, 0);
+  const otherMem = Math.max(0, allMem - mem);
   const samples = Math.max(0, ...ranked.map((d) => d.cpu.length));
   const reading = snap.at === 0 && !snap.error;
   const window = `${Math.min((samples * ACTIVITY_STEP_MS) / 1000, ACTIVITY_WINDOW_S)} s window`;
@@ -434,6 +443,7 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
               />
               <span className="inv-metric-sub">
                 {vmMemory > 0 ? `of ${fmtBytes(vmMemory)} VM (${((mem / vmMemory) * 100).toFixed(1)}%) · ` : ""}
+                {vmMemory > 0 && !reading ? `${otherMem > 0 ? `${fmtBytes(otherMem)} in other containers · ` : ""}` : ""}
                 stacked per container
               </span>
             </div>
@@ -451,6 +461,18 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
                 secondaryLabel={`Transmit ${fmtSize(tx)}/s`}
               />
               <span className="inv-metric-sub">receive stacked · transmit dashed · {fmtSize(tx)}/s up</span>
+            </div>
+          </div>
+          <div className="inv-metrics">
+            <div className="inv-metric">
+              <span className="inv-metric-label">Block I/O</span>
+              <span className="inv-metric-value">{reading ? "—" : `${fmtSize(readNow)}/s read`}</span>
+              <span className="inv-metric-sub">{reading ? "" : `${fmtSize(writeNow)}/s written · across ${running.length} running`}</span>
+            </div>
+            <div className="inv-metric">
+              <span className="inv-metric-label">Processes</span>
+              <span className="inv-metric-value">{reading ? "—" : pids}</span>
+              <span className="inv-metric-sub">pids in this project</span>
             </div>
           </div>
           <div className="inv-group group-members">

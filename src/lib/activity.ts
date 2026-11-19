@@ -22,7 +22,7 @@ export const ACTIVITY_STEP_MS = ACCOUNTING_MS;
 export const ACTIVITY_WINDOW_S = (SAMPLES * ACCOUNTING_MS) / 1000;
 const END = "__stats_end__";
 
-type Series = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[] };
+type Series = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[]; blkRead: number[]; blkWrite: number[] };
 export type ActivitySnapshot = { stats: ContainerStat[]; at: number; error: string | null };
 
 let stopSampling: (() => void) | null = null;
@@ -58,11 +58,13 @@ function emit() {
 function apply(stats: ContainerStat[]) {
   snapshot = { stats, at: Date.now(), error: null };
   for (const s of stats) {
-    const h = history.get(s.id) ?? { cpu: [], mem: [], netRx: [], netTx: [] };
+    const h = history.get(s.id) ?? { cpu: [], mem: [], netRx: [], netTx: [], blkRead: [], blkWrite: [] };
     push(h.cpu, s.cpu);
     push(h.mem, s.mem);
     push(h.netRx, s.net_rx);
     push(h.netTx, s.net_tx);
+    push(h.blkRead, s.block_read);
+    push(h.blkWrite, s.block_write);
     history.set(s.id, h);
   }
   for (const key of [...history.keys()]) if (!stats.some((s) => s.id === key)) history.delete(key);
@@ -226,8 +228,8 @@ export function activityTotals(): {
 
 export const ACTIVITY_SAMPLES = SAMPLES;
 
-export type ContainerSeries = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[] };
-const EMPTY_SERIES: ContainerSeries = { cpu: [], mem: [], netRx: [], netTx: [] };
+export type ContainerSeries = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[]; blkRead: number[]; blkWrite: number[] };
+const EMPTY_SERIES: ContainerSeries = { cpu: [], mem: [], netRx: [], netTx: [], blkRead: [], blkWrite: [] };
 
 /**
  * Recorded series for one container, oldest first, capped at the activity window. Read-only:
