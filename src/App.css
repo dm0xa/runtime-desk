@@ -1112,6 +1112,10 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .inv-digest { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1100px) {
   .investigator-grid { grid-template-columns: 1fr; }
+  /* The health table keeps every column: each one is a different failure question. It pays
+     for that by tightening the fixed tracks and the gutter instead of hiding a fact. */
+  .inv-service-head, .inv-service-row { grid-template-columns: 78px minmax(0, 1fr) 78px 84px 132px 100px; gap: 8px; }
+  .inv-service-head { font-size: 10px; letter-spacing: 0.02em; }
   .investigator { padding-left: 16px; padding-right: 16px; }
   .picker { padding-left: 16px; padding-right: 16px; }
   /* The image column is the one member-row cell that can go without losing a decision. */
