@@ -206,9 +206,7 @@ pub fn invalidate_profiles() {
         *slot = None;
     }
     // A start, stop or delete changes the status too; never let it outlive the mutation.
-    if let Ok(mut slot) = STATUS_CACHE.write() {
-        *slot = None;
-    }
+    STATUS_CACHE.clear();
 }
 
 /// Runs `colima list` while the window is still loading its bundle, so the first read the
@@ -250,20 +248,87 @@ pub struct Status {
     pub disk: Option<u64>,
 }
 
-/// `colima status --json` costs 720–950 ms — two to three times `colima list --json` — and
+/// `colima status --json` costs 1.3 s (median of 5, colima 0.10.3, 2026-11-19) — two to three
+/// times `colima list --json` — and
 /// answers almost nothing the list did not: only the sockets, driver, mount type and display
 /// name. It sits on the mount path, on every ⌘R and, through `act()`, on every mutation, where
 /// it kept the header spinner and the disabled buttons up ~800 ms after the data had landed.
-static STATUS_CACHE: RwLock<Option<(Instant, String, Status)>> = RwLock::new(None);
+///
+/// None of those fields changes while the profile runs: sizing only moves when a start or
+/// restart passes new flags, and every such path calls `invalidate_profiles()`. So the cache
+/// is per profile (switching back is free) and lives far longer than the profile list, which
+/// is what actually refreshes the running state every 15 s. Without that, `act()` re-ran a
+/// 1.3 s CLI call after removing a container, just to re-read a socket path.
+const STATUS_TTL: Duration = Duration::from_secs(300);
 
-pub fn status(profile: &str) -> Result<Status, String> {
-    if let Ok(slot) = STATUS_CACHE.read() {
-        if let Some((at, cached_profile, cached)) = slot.as_ref() {
-            if cached_profile == profile && at.elapsed() < LIST_TTL {
-                return Ok(cached.clone());
-            }
+/// One entry per profile, stamped with the `Instant` the CLI answered. A `Vec`, not a map:
+/// a window has a handful of profiles, and `Vec::new()` is `const`, so the cache needs no
+/// lazy initialisation.
+struct StatusCache {
+    entries: RwLock<Vec<(String, Instant, Status)>>,
+}
+
+impl StatusCache {
+    const fn new() -> Self {
+        Self { entries: RwLock::new(Vec::new()) }
+    }
+
+    fn get(&self, profile: &str, now: Instant, max_age: Duration) -> Option<Status> {
+        let entries = self.entries.read().ok()?;
+        let (_, at, cached) = entries.iter().find(|(name, _, _)| name == profile)?;
+        (now.saturating_duration_since(*at) < max_age).then(|| cached.clone())
+    }
+
+    /// Stores one answer, dropping every entry older than `max_age` so a long-lived window
+    /// cannot accumulate the profiles it has seen.
+    fn put(&self, profile: &str, now: Instant, status: &Status, max_age: Duration) {
+        if let Ok(mut entries) = self.entries.write() {
+            entries.retain(|(name, at, _)| {
+                name != profile && now.saturating_duration_since(*at) < max_age
+            });
+            entries.push((profile.to_string(), now, status.clone()));
         }
     }
+
+    fn clear(&self) {
+        if let Ok(mut entries) = self.entries.write() {
+            entries.clear();
+        }
+    }
+}
+
+static STATUS_CACHE: StatusCache = StatusCache::new();
+
+pub fn status(profile: &str) -> Result<Status, String> {
+    status_with(&STATUS_CACHE, profile, Instant::now(), STATUS_TTL, &fetch_status)
+}
+
+/// `colima status` again, past the cache: a manual Refresh means "go ask", so it must not be
+/// answered by an entry up to five minutes old.
+pub fn status_fresh(profile: &str) -> Result<Status, String> {
+    let fetched = fetch_status(profile)?;
+    STATUS_CACHE.put(profile, Instant::now(), &fetched, STATUS_TTL);
+    Ok(fetched)
+}
+
+/// The cache policy, separated from the CLI so it can be tested without a VM: a hit within
+/// `max_age` never calls `fetch`, and one profile's entry never answers for another.
+fn status_with(
+    cache: &StatusCache,
+    profile: &str,
+    now: Instant,
+    max_age: Duration,
+    fetch: &dyn Fn(&str) -> Result<Status, String>,
+) -> Result<Status, String> {
+    if let Some(cached) = cache.get(profile, now, max_age) {
+        return Ok(cached);
+    }
+    let fetched = fetch(profile)?;
+    cache.put(profile, now, &fetched, max_age);
+    Ok(fetched)
+}
+
+fn fetch_status(profile: &str) -> Result<Status, String> {
     let raw = if profile == "default" {
         run(&["status", "--json"])?
     } else {
@@ -275,11 +340,7 @@ pub fn status(profile: &str) -> Result<Status, String> {
         if t.starts_with('{') { json = t.to_string(); break; }
     }
     if json.is_empty() { json = raw.trim().to_string(); }
-    let parsed: Status = serde_json::from_str(&json).map_err(|e| format!("parse status: {e}"))?;
-    if let Ok(mut slot) = STATUS_CACHE.write() {
-        *slot = Some((Instant::now(), profile.to_string(), parsed.clone()));
-    }
-    Ok(parsed)
+    serde_json::from_str(&json).map_err(|e| format!("parse status: {e}"))
 }
 
 pub fn version() -> String {
@@ -289,7 +350,7 @@ pub fn version() -> String {
 /// Docker endpoint for a profile. Falls back to the conventional socket path when
 /// the profile is stopped, so commands fail against the right socket instead of
 /// silently reusing another profile's daemon. Callers that already ran `status`
-/// pass it in; that command costs ~700 ms, so it must never run twice in one switch.
+/// pass it in; that command costs ~1.3 s, so it must never run twice in one switch.
 pub fn docker_endpoint(profile: &str, status: Option<&Status>) -> String {
     if let Some(socket) = status.and_then(|st| st.docker_socket.clone()) {
         if !socket.is_empty() {
@@ -920,6 +981,90 @@ mod tests {
 
     use super::{humanize, rosetta_applies};
     use std::path::Path;
+
+    /// A `colima status --json` answer with just enough fields to tell profiles apart.
+    fn sample_status(runtime: &str) -> super::Status {
+        super::Status {
+            display_name: Some("colima".into()),
+            driver: Some("macOS Virtualization.Framework".into()),
+            arch: Some("aarch64".into()),
+            runtime: Some(runtime.into()),
+            mount_type: Some("virtiofs".into()),
+            docker_socket: Some("/tmp/docker.sock".into()),
+            containerd_socket: None,
+            cpu: Some(4),
+            memory: Some(6 << 30),
+            disk: Some(60 << 30),
+        }
+    }
+
+    /// `status` costs ~1.3 s per CLI run and sits after every mutation, so the cache has
+    /// to answer repeats without touching the CLI — and must never answer for another profile.
+    #[test]
+    fn status_cache_serves_repeats_and_per_profile() {
+        use super::{status_with, StatusCache};
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        let cache = StatusCache::new();
+        let calls = Cell::new(0);
+        let fetch = |profile: &str| {
+            calls.set(calls.get() + 1);
+            Ok(sample_status(profile))
+        };
+        let ttl = Duration::from_secs(300);
+        let t0 = Instant::now();
+
+        let first = status_with(&cache, "default", t0, ttl, &fetch).unwrap();
+        assert_eq!(first.runtime.as_deref(), Some("default"));
+        // Same profile a minute later: no CLI run.
+        let again = status_with(&cache, "default", t0 + Duration::from_secs(60), ttl, &fetch).unwrap();
+        assert_eq!(again.cpu, Some(4));
+        assert_eq!(calls.get(), 1);
+        // Another profile has its own entry.
+        let other = status_with(&cache, "work", t0 + Duration::from_secs(60), ttl, &fetch).unwrap();
+        assert_eq!(other.runtime.as_deref(), Some("work"));
+        assert_eq!(calls.get(), 2);
+        // Switching back is free, which is the case a single-slot cache paid for twice.
+        status_with(&cache, "default", t0 + Duration::from_secs(120), ttl, &fetch).unwrap();
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn status_cache_expires_and_never_stores_a_failure() {
+        use super::{status_with, StatusCache};
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        let cache = StatusCache::new();
+        let calls = Cell::new(0);
+        let ttl = Duration::from_secs(300);
+        let t0 = Instant::now();
+        let ok = |profile: &str| {
+            calls.set(calls.get() + 1);
+            Ok(sample_status(profile))
+        };
+
+        status_with(&cache, "default", t0, ttl, &ok).unwrap();
+        // At the TTL boundary the entry is stale: one more CLI run.
+        status_with(&cache, "default", t0 + ttl, ttl, &ok).unwrap();
+        assert_eq!(calls.get(), 2);
+
+        // A profile that is stopped answers with an error; the next reader must retry, not
+        // inherit the failure for five minutes.
+        let failing = |_: &str| {
+            calls.set(calls.get() + 1);
+            Err("colima is not running".to_string())
+        };
+        assert!(status_with(&cache, "dev", t0, ttl, &failing).is_err());
+        assert!(status_with(&cache, "dev", t0, ttl, &failing).is_err());
+        assert_eq!(calls.get(), 4);
+
+        // A start, stop or delete clears every profile's entry.
+        cache.clear();
+        status_with(&cache, "default", t0 + ttl, ttl, &ok).unwrap();
+        assert_eq!(calls.get(), 5);
+    }
 
     #[test]
     fn instance_name_follows_the_colima_default() {

@@ -6,6 +6,10 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Changed
+
+- **`colima status` is read once per profile, not after every action.** Its answer costs 1.3 s and cannot change while the profile runs — sizing only moves on a start or restart — so the cache now keeps one entry per profile for five minutes and every profile mutation still clears it. Removing a container no longer waits on a re-read of the socket path.
+
 ### Added
 
 - **An OrbStack comparison, with the measurements OrbStack does not publish.** [docs/ORBSTACK.md](docs/ORBSTACK.md) audits the five published benchmarks (August 2023, v0.17.0 vs Docker Desktop 4.22.0, one M1 Max), records the independent DDEV and zot24 results that do include Colima, and adds this Mac's measured Colima baseline: 7.78% of one core idle for the VM process group, 1,352 MiB resident for a 6 GiB guest, 15.89 GiB on disk, and 90 ms for `docker info`.

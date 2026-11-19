@@ -1072,7 +1072,7 @@ function App() {
     setPageRefreshing(true);
     try {
       await refresh();
-      await loadStatus(selected);
+      await loadStatus(selected, true);
       if (tab === "cleanup") setCleanupNonce((n) => n + 1);
       else if (tab === "runtimes") await loadDiagnostics();
       else if (tab === "settings") await checkVersion();
@@ -1133,9 +1133,9 @@ function App() {
     if (!name) return;
     setCfg(await safe(invoke<ProfileConfig>("profile_config_cmd", { profile: name }), null as unknown as ProfileConfig));
   }
-  async function loadStatus(name: string) {
+  async function loadStatus(name: string, fresh = false) {
     if (!name) return;
-    setStatus(await safe(invoke<Status>("status_cmd", { profile: name }), {} as Status));
+    setStatus(await safe(invoke<Status>("status_cmd", { profile: name, fresh }), {} as Status));
   }
   /** `colima version` costs ~0.5 s and only changes on upgrade, so it stays out of refresh. */
   async function loadVersion() {

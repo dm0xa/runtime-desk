@@ -110,9 +110,12 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) 
 async fn list_profiles_cmd() -> R<Vec<Profile>> { blocking(colima::list_profiles).await }
 
 #[tauri::command]
-async fn status_cmd(profile: String) -> R<Status> {
+async fn status_cmd(profile: String, fresh: Option<bool>) -> R<Status> {
     let target = profile.clone();
-    let status = blocking(move || colima::status(&target)).await?;
+    let status = blocking(move || {
+        if fresh.unwrap_or(false) { colima::status_fresh(&target) } else { colima::status(&target) }
+    })
+    .await?;
     // The socket this reports is the confirmation the launch deferred: adopt it while this
     // profile is still the active one, so the endpoint set from the path convention is
     // replaced by the reported one as soon as it is known.

@@ -6,7 +6,7 @@
 - **Backend**: Rust, exposed to the frontend as 96 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
-A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 3 seconds, disk totals and per-volume sizes 60.
+A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 10 seconds, `colima status` per profile 5 minutes (cleared by any profile mutation), disk totals and per-volume sizes 60.
 
 ## Backend
 
@@ -47,7 +47,7 @@ A thin wrapper around the `colima` binary.
 - `instance_name()` maps a profile to its Lima instance (`colima` for default, else the name), naming its socket directory, kube context and disk image.
 - `start()` maps typed options to flags: CPU a count, memory and disk GiB; `list --json` reports bytes. `delete()` adds `--data` only on request — the sidebar delete keeps data, Settings → Delete profile removes it.
 - `colima_home()` / `resolve_colima_home()` resolve the config home as the CLI does: `$COLIMA_HOME` if it exists, then `~/.colima`, then `$XDG_CONFIG_HOME/colima`, else `~/.colima`; existence alone decides, and the resolver is pure so precedence is testable.
-- `docker_endpoint(profile, status)` prefers the reported socket, else builds `unix://<config home>/<profile>/docker.sock`; that fallback lets `set_profile_cmd` configure the backend without `colima status` (about 700 ms, never twice per switch), and `status_cmd` confirms the guess through `docker::confirm_endpoint`.
+- `docker_endpoint(profile, status)` prefers the reported socket, else builds `unix://<config home>/<profile>/docker.sock`; that fallback lets `set_profile_cmd` configure the backend without `colima status` (about 1.3 s, never twice per switch), and `status_cmd` confirms the guess through `docker::confirm_endpoint`.
 - `disk_image(profile)` finds the sparse disk (`<config home>/_lima/<instance>/disk`, then `$LIMA_HOME`, then `~/.lima`) in allocated blocks, not apparent size.
 - `profile_config()` key/value-scans `<config home>/<profile>/colima.yaml` — not a full YAML parser, only the fields the UI needs; `template()` reads the template file and `ssh_config()` shells out to `colima ssh-config`.
 - `volume_contents(profile, root, rel, limit)` lists one volume directory over `colima ssh` in one `find -printf` pass. It stops one row past `limit` (the page the browser asked for) and returns `truncated` when there is more; the hard ceiling stays 5000 entries and 4 MiB, and only the page crosses the IPC boundary.
