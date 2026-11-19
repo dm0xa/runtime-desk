@@ -3635,6 +3635,7 @@ function App() {
                   gateway_address: netEdit.gateway_address,
                 } });
                 activateProfile(selected).catch(() => undefined);
+                await loadConfig(selected);
                 setNetEdit(null);
                 return `${selected} started with the new network settings`;
               })}
@@ -3707,6 +3708,7 @@ function App() {
                   deleteData: !recreate.keep_data,
                 });
                 await activateProfile(selected);
+                await loadConfig(selected);
                 setRecreate(null);
                 return `${selected} recreated`;
               })}
