@@ -14,16 +14,19 @@ import type {
   VolumeDetail,
   VolumeSize,
 } from "../types";
-import { fmtBytes, fmtDateTime, fmtSize, parseHumanBytes } from "../lib/format";
+import { fmtBytes, fmtDateTime, fmtSize, fmtSpan, parseHumanBytes } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { startStatsStream } from "../lib/stats";
-import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activitySeriesFor, activitySnapshot, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
+import { activitySeriesFor, activitySnapshot, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
 import { PRESSURE_PCT } from "../lib/memoryGuard";
+import { useLiveWindow } from "../lib/liveWindow";
 import { addTag, removeTag, subscribeTags, tagsFor, type TagKind } from "../lib/tags";
 import { PortChips } from "./PortChips";
 import { VolumeContents } from "./VolumeContents";
 import { FactsGroup, Row } from "./Facts";
 import { GroupStackChart } from "./GroupChart";
+import { ChartAxis } from "./ChartAxis";
+import { WindowSwitch } from "./WindowSwitch";
 import { ArrowUpRightIcon, BracesIcon, FingerprintIcon, PlayIcon, RestartIcon, SlidersIcon, TerminalIcon } from "./icons";
 import { InspectModal, type InspectTarget } from "./InspectModal";
 import { RefreshIcon } from "./RefreshIcon";
@@ -92,16 +95,12 @@ const startedOf = (iso: string) => {
 };
 
 const SECRET_KEY = /(SECRET|TOKEN|PASSW|PASSWORD|API[_-]?KEY|_KEY$|CREDENTIAL|AUTH|PRIVATE|SESSION)/i;
-/** The stats child streams one sample per second; 120 of them fill a two-minute window. */
-const TREND_SAMPLES = 120;
+/** The stream is one sample per second; ten minutes is the longest window a view draws. */
+const TREND_SAMPLES = 600;
 /** Fewer points than this draw a flat baseline, not a trend, so the card shows a placeholder. */
-const TREND_MIN_POINTS = Math.ceil(TREND_SAMPLES / 12);
+const TREND_MIN_POINTS = 10;
 /** Fallback cadence, in milliseconds, when the live stream cannot start or dies. */
 const POLL_MS = 5000;
-/** Seconds of history collected so far, from the samples' own timestamps. A count times an
- *  assumed cadence was seven times off in the poll fallback, where samples land ~7 s apart. */
-const windowLabel = (n: number, spanSeconds: number) =>
-  (n >= TREND_SAMPLES ? "2 min window" : `${spanSeconds || n} s window`);
 /** Until the chart draws, count down to it instead of implying a two-minute wait. */
 const collecting = (n: number, stepSeconds: number) =>
   `collecting · chart in ${Math.round(Math.max(0, TREND_MIN_POINTS - n) * stepSeconds)} s`;
@@ -362,17 +361,19 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
     const hit = members.find((m) => m.id === s.id || (s.id && m.id.startsWith(s.id)));
     if (hit) statByMember.set(hit.id, s);
   }
-  // One series per container, shared by all three charts and by the rows below.
+  const win = useLiveWindow();
+  // One series per container, shared by all three charts and by the rows below. The store keeps
+  // ten minutes; the switch chooses how much of it this page draws.
   const series = members.map((m) => {
     const recorded = activitySeriesFor(statByMember.get(m.id)?.id ?? m.id);
     return {
       m,
-      cpu: recorded.cpu,
-      mem: recorded.mem,
-      rx: rateSeries(recorded.netRx),
-      tx: rateSeries(recorded.netTx),
-      read: rateSeries(recorded.blkRead),
-      write: rateSeries(recorded.blkWrite),
+      cpu: recorded.cpu.slice(-win),
+      mem: recorded.mem.slice(-win),
+      rx: rateSeries(recorded.netRx).slice(-win),
+      tx: rateSeries(recorded.netTx).slice(-win),
+      read: rateSeries(recorded.blkRead).slice(-win),
+      write: rateSeries(recorded.blkWrite).slice(-win),
     };
   });
   // Rank by the window's CPU peak, not by the instant: a container between spikes keeps its
@@ -407,15 +408,21 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
   const otherMem = Math.max(0, allMem - mem);
   const samples = Math.max(0, ...ranked.map((d) => d.cpu.length));
   const reading = snap.at === 0 && !snap.error;
-  const window = `${Math.min((samples * ACTIVITY_STEP_MS) / 1000, ACTIVITY_WINDOW_S)} s window`;
+  /** Seconds the shared series holds inside the selected window. The axis and the header both
+   *  print this, so a half-filled chart never claims the full two or ten minutes. */
+  const spanSeconds = Math.min(samples, win);
+  const windowNote = samples >= win
+    ? `last ${fmtSpan(win)}`
+    : `${fmtSpan(spanSeconds)} recorded`;
 
   return (
     <section className="panel inv-wide" aria-busy={reading}>
       <div className="inv-panel-head">
         <h3>Performance <span className="inv-count">{members.length}</span></h3>
         <span className="muted inv-note">
-          {snap.error ? "live numbers unavailable" : reading ? "reading live numbers…" : `live · shared 1 s sample · ${window}`}
+          {snap.error ? "live numbers unavailable" : reading ? "reading live numbers…" : `live · 1 s samples · ${windowNote}`}
         </span>
+        <div className="inv-head-tools"><WindowSwitch /></div>
       </div>
       {members.length === 0 ? (
         <p className="muted">No containers carry this project name any more.</p>
@@ -429,11 +436,12 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
               </div>
               <GroupStackChart
                 bands={stack("cpu")}
-                slots={ACTIVITY_SAMPLES}
+                slots={win}
                 label={`CPU across ${members.length} containers`}
                 format={(v) => `${v.toFixed(1)}%`}
                 floor={100}
               />
+              <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">{running.length} of {members.length} running · scale 100% = one core</span>
             </div>
             <div className="trend-card">
@@ -443,10 +451,11 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
               </div>
               <GroupStackChart
                 bands={stack("mem")}
-                slots={ACTIVITY_SAMPLES}
+                slots={win}
                 label={`Memory across ${members.length} containers`}
                 format={(v) => fmtBytes(v)}
               />
+              <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">
                 {vmMemory > 0 ? `of ${fmtBytes(vmMemory)} VM (${((mem / vmMemory) * 100).toFixed(1)}%) · ` : ""}
                 {vmMemory > 0 && !reading ? `${otherMem > 0 ? `${fmtBytes(otherMem)} in other containers · ` : ""}` : ""}
@@ -460,12 +469,13 @@ function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
               </div>
               <GroupStackChart
                 bands={stack("rx")}
-                slots={ACTIVITY_SAMPLES}
+                slots={win}
                 label={`Network receive across ${members.length} containers`}
                 format={(v) => `${fmtSize(v)}/s`}
                 secondary={txTotal}
                 secondaryLabel={`Transmit ${fmtSize(tx)}/s`}
               />
+              <ChartAxis seconds={spanSeconds} />
               <span className="inv-metric-sub">receive stacked · transmit dashed · {fmtSize(tx)}/s up</span>
             </div>
           </div>
@@ -804,9 +814,17 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
   const running = container?.state === "running";
+  const win = useLiveWindow();
   /** Real seconds between the first and last sample, and how far apart samples land. */
   const trendSpan = trendMeta.first && trendMeta.last ? Math.round((trendMeta.last - trendMeta.first) / 1000) : 0;
   const trendStep = trendMeta.polling ? POLL_MS / 1000 : 1;
+  /** Samples inside the selected window: 120 at 1 Hz, 24 at the 5 s fallback. */
+  const winSamples = Math.max(2, Math.round(win / trendStep));
+  const shownCpu = trend.cpu.slice(-winSamples);
+  const shownMem = trend.mem.slice(-winSamples);
+  const shownRx = net.rx.slice(-winSamples);
+  const shownTx = net.tx.slice(-winSamples);
+  const shownSpan = trend.cpu.length >= winSamples ? Math.round((winSamples - 1) * trendStep) : trendSpan;
 
   useEffect(() => {
     if (!subject) {
@@ -1098,7 +1116,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   const uptime = running && Number.isFinite(startedSeconds) && startedSeconds > 0 ? dur(startedSeconds) : null;
   // CPU is a share of one core, memory is a share of its limit: those ceilings are known,
   // so history uses them instead of a flattering auto-scale.
-  const cpuCeiling = Math.max(100, ...trend.cpu);
+  const cpuCeiling = Math.max(100, ...shownCpu);
 
   // Containers that share at least one network with this container, deduped by name.
   const peers = new Map<string, { id: string; name: string; state: string; nets: string[] }>();
@@ -1193,9 +1211,12 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
           <div className="inv-panel-head">
             <h3>Performance</h3>
             <span className="muted inv-note">{trendMeta.polling ? "polling · 5 s from docker stats" : "live · 1 s from docker stats"}</span>
-            <button className="icon-plain" onClick={() => setStatsNonce((n) => n + 1)} aria-label="Restart live sample" title="Restart live sample">
-              <RefreshIcon size={15} />
-            </button>
+            <div className="inv-head-tools">
+              <WindowSwitch />
+              <button className="icon-plain" onClick={() => setStatsNonce((n) => n + 1)} aria-label="Restart live sample" title="Restart live sample">
+                <RefreshIcon size={15} />
+              </button>
+            </div>
           </div>
           {stats ? (
             <>
@@ -1205,11 +1226,14 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                     <span className="inv-metric-label">CPU</span>
                     <span className="trend-value">{stats.cpu.toFixed(1)}%</span>
                   </div>
-                  {trend.cpu.length < TREND_MIN_POINTS
+                  {shownCpu.length < TREND_MIN_POINTS
                     ? <span className="spark-skeleton" aria-hidden="true" />
-                    : <Sparkline values={trend.cpu} slots={TREND_SAMPLES} fit ceiling={cpuCeiling} label="CPU over the last two minutes" />}
+                    : <>
+                        <Sparkline values={shownCpu} slots={winSamples} fit ceiling={cpuCeiling} label={`CPU over the last ${fmtSpan(shownSpan)}`} />
+                        <ChartAxis seconds={shownSpan} />
+                      </>}
                   <span className="inv-metric-sub">
-                    {trend.cpu.length >= TREND_MIN_POINTS ? `peak ${Math.max(...trend.cpu).toFixed(1)}% · ${windowLabel(trend.cpu.length, trendSpan)} · scale 100%` : collecting(trend.cpu.length, trendStep)}
+                    {shownCpu.length >= TREND_MIN_POINTS ? `peak ${Math.max(...shownCpu).toFixed(1)}% · ${fmtSpan(shownSpan)} window · scale 100%` : collecting(shownCpu.length, trendStep)}
                   </span>
                 </div>
                 <div className="trend-card">
@@ -1217,9 +1241,12 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                     <span className="inv-metric-label">Memory</span>
                     <span className={`trend-value${stats.mem_limit > 0 && stats.mem_pct >= PRESSURE_PCT ? " state-bad" : ""}`}>{fmtBytes(stats.mem)}</span>
                   </div>
-                  {trend.mem.length < TREND_MIN_POINTS
+                  {shownMem.length < TREND_MIN_POINTS
                     ? <span className="spark-skeleton" aria-hidden="true" />
-                    : <Sparkline values={trend.mem} slots={TREND_SAMPLES} fit ceiling={stats.mem_limit || undefined} label="Memory over the last two minutes" />}
+                    : <>
+                        <Sparkline values={shownMem} slots={winSamples} fit ceiling={stats.mem_limit || undefined} label={`Memory over the last ${fmtSpan(shownSpan)}`} />
+                        <ChartAxis seconds={shownSpan} />
+                      </>}
                   <span className="inv-metric-sub">
                     {stats.mem_limit ? `${stats.mem_pct.toFixed(1)}% of ${fmtBytes(stats.mem_limit)}` : "no limit set"}
                     {stats.mem_limit > 0 && stats.mem_pct >= PRESSURE_PCT ? " · near the limit, OOM-killed at 100%" : ""}
@@ -1230,11 +1257,14 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                     <span className="inv-metric-label">Network</span>
                     <span className="trend-value">{fmtSize(net.rx[net.rx.length - 1] ?? 0)}/s</span>
                   </div>
-                  {net.rx.length < TREND_MIN_POINTS
+                  {shownRx.length < TREND_MIN_POINTS
                     ? <span className="spark-skeleton" aria-hidden="true" />
-                    : <Sparkline values={net.rx} secondary={net.tx} slots={TREND_SAMPLES} fit label="Network receive and transmit rate" />}
+                    : <>
+                        <Sparkline values={shownRx} secondary={shownTx} slots={winSamples} fit label="Network receive and transmit rate" />
+                        <ChartAxis seconds={shownSpan} />
+                      </>}
                   <span className="inv-metric-sub">
-                    {net.rx.length >= TREND_MIN_POINTS ? `receive solid · transmit light · ${windowLabel(net.rx.length, trendSpan)}` : collecting(net.rx.length, trendStep)}
+                    {shownRx.length >= TREND_MIN_POINTS ? `receive solid · transmit light · ${fmtSpan(shownSpan)} window` : collecting(shownRx.length, trendStep)}
                   </span>
                 </div>
               </div>

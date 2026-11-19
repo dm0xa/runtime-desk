@@ -12,14 +12,13 @@ import type { ContainerStat } from "../types";
  */
 
 const INTERVAL = 2000;
-/** Points kept per series. Accounting runs once a second, so 72 points are the 72 s the
- *  charts have always claimed; doubling the count is what keeps the label honest at 1 Hz. */
-const SAMPLES = 72;
+/** Points kept per series: ten minutes at the one-second accounting cadence. The views draw
+ *  the last 120 or all 600, so a ten-minute choice costs no second sampler. */
+const SAMPLES = 600;
 /** Accounting runs on its own second: the stream answers per container, the charts want one
  *  full snapshot, and the network rate needs a known interval. */
 const ACCOUNTING_MS = 1000;
 export const ACTIVITY_STEP_MS = ACCOUNTING_MS;
-export const ACTIVITY_WINDOW_S = (SAMPLES * ACCOUNTING_MS) / 1000;
 const END = "__stats_end__";
 
 type Series = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[]; blkRead: number[]; blkWrite: number[] };
@@ -43,6 +42,9 @@ const totals = {
   netRxRate: [] as number[], netTxRate: [] as number[],
 };
 let lastNet: { at: number; rx: number; tx: number } | null = null;
+/** When the last accounting tick landed. A gate that opens after a pause must not splice the
+ *  new samples onto the old ones: the chart would claim a window it does not hold. */
+let lastTick = 0;
 const listeners = new Set<() => void>();
 
 function push(list: number[], value: number) {
@@ -80,6 +82,7 @@ function apply(stats: ContainerStat[]) {
     push(totals.netTxRate, Math.max(0, tx - lastNet.tx) / seconds);
   }
   lastNet = { at: snapshot.at, rx, tx };
+  lastTick = snapshot.at;
   emit();
 }
 
@@ -88,6 +91,7 @@ function failed(e: unknown) {
   history.clear();
   for (const list of Object.values(totals)) list.length = 0;
   lastNet = null;
+  lastTick = 0;
   emit();
 }
 
@@ -204,7 +208,20 @@ export function setActivityActive(active: boolean) {
   stopSampling?.();
   stopSampling = null;
   latest = new Map();
-  if (active) void sample(generation);
+  if (active) {
+    // More than two silent ticks is a new recording, not a continuation. Keeping the old
+    // samples would draw the pause as if samples had landed through it.
+    if (lastTick && Date.now() - lastTick > ACCOUNTING_MS * 2.5) {
+      history.clear();
+      misses.clear();
+      seen.clear();
+      for (const list of Object.values(totals)) list.length = 0;
+      snapshot = { stats: [], at: 0, error: null };
+      lastNet = null;
+      lastTick = 0;
+    }
+    void sample(generation);
+  }
 }
 
 export function subscribeActivity(listener: () => void): () => void {
@@ -226,8 +243,6 @@ export function activityTotals(): {
   return totals;
 }
 
-export const ACTIVITY_SAMPLES = SAMPLES;
-
 export type ContainerSeries = { cpu: number[]; mem: number[]; netRx: number[]; netTx: number[]; blkRead: number[]; blkWrite: number[] };
 const EMPTY_SERIES: ContainerSeries = { cpu: [], mem: [], netRx: [], netTx: [], blkRead: [], blkWrite: [] };
 
@@ -244,10 +259,11 @@ export function activitySeriesFor(id: string): ContainerSeries {
  * Using the history peak (not the current busiest container) keeps every row's
  * vertical scale fixed while the numbers move underneath it.
  */
-export function activityCpuPeak(): number {
+export function activityCpuPeak(samples = SAMPLES): number {
   let peak = 0;
   for (const series of history.values()) {
-    for (const v of series.cpu) if (v > peak) peak = v;
+    const from = Math.max(0, series.cpu.length - samples);
+    for (let i = from; i < series.cpu.length; i++) if (series.cpu[i] > peak) peak = series.cpu[i];
   }
   return peak;
 }
@@ -256,12 +272,12 @@ export function activityCpuPeak(): number {
  * SVG polyline points for one container's CPU history, right-aligned so the newest sample sits at `width`.
  * `ceiling` lets several rows share a vertical scale; omit it to scale a row to its own peak.
  */
-export function activitySparkPoints(id: string, width: number, height: number, ceiling?: number): string {
-  const data = history.get(id)?.cpu ?? [];
+export function activitySparkPoints(id: string, width: number, height: number, ceiling?: number, samples = SAMPLES): string {
+  const data = (history.get(id)?.cpu ?? []).slice(-samples);
   if (data.length < 2) return "";
   const peak = Math.max(ceiling ?? Math.max(...data), 1e-9);
-  const span = SAMPLES - 1;
-  const offset = SAMPLES - data.length;
+  const span = samples - 1;
+  const offset = samples - data.length;
   return data
     .map((v, i) => `${(((offset + i) / span) * width).toFixed(1)},${(height - Math.min(1, v / peak) * height).toFixed(1)}`)
     .join(" ");

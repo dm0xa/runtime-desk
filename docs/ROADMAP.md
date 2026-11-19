@@ -8,7 +8,7 @@ Profiles live in the sidebar; switching one points the Docker views at the right
 
 Docker sections cover containers, images, volumes and networks. Containers have row actions, details, and a log viewer with search and highlighting; Compose containers group under their project with a running count and project-wide start/stop. Lists filter by origin (All, Compose, Docker, Kubernetes — a partition); images and volumes by All/Unused, networks by All/User-defined. Images and volumes show their users and refuse removal while in use or while the proving list failed. Networks have a table and a map; published TCP ports open in the browser.
 
-The dashboard refreshes from `docker events`: a container start or image removal lands within a quarter second (one refresh per burst, 250 ms debounce), the timer stepping back to sixty-second reconciliation. Cards are files under `src/components/dashboard/cards/` (see [DASHBOARD.md](DASHBOARD.md)); they move, resize, hide, and reset. Activity samples `docker stats` every two seconds over 72 seconds.
+The dashboard refreshes from `docker events`: a container start or image removal lands within a quarter second (one refresh per burst, 250 ms debounce), the timer stepping back to sixty-second reconciliation. Cards are files under `src/components/dashboard/cards/` (see [DASHBOARD.md](DASHBOARD.md)); they move, resize, hide, and reset. Activity streams `docker stats` at 1 Hz and keeps ten minutes, of which the charts draw two or ten.
 
 Sherlock opens one object at a time and links around it, for Docker and Podman. A container page adds live CPU, memory, I/O and PID samples, the last 60 log lines, environment variables with secrets masked, labels, health check and probes, sibling containers; an image page adds build history; a volume page browses contents read-only through `colima ssh`. Local tags show beside the name in Containers and feed ⌘K, which also searches sections, profiles, and objects.
 
@@ -33,7 +33,7 @@ At 90% of a container's cgroup limit — or of VM memory when none is set — OO
 
 ## Later
 
-- **Live stats in the Containers table.** The expanded row and Sherlock hold them; it duplicates Activity, and the poll is a `docker stats` call every two seconds.
+- **Live stats in the Containers table.** The expanded row and Sherlock hold them; it duplicates Activity, and the sampler is one streaming `docker stats` child.
 - **Container exec and terminal.** The biggest missing feature: a PTY, xterm, a new window or pane. Until then, `colima ssh -- <command>`.
 - **A notice that opens the container's page.** Error notices offer **Open Containers** (filtered to its name) and **Stop container**, not Sherlock or the log viewer.
 - **Profile and Compose-project pages in Sherlock.** Machine covers a profile; a Compose page would gather services, volumes, and networks.

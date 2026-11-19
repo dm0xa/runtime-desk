@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../../lib/activity";
-import { fmtBytes } from "../../lib/format";
+import { activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../../lib/activity";
+import { fmtBytes, fmtSpan } from "../../lib/format";
+import { useLiveWindow } from "../../lib/liveWindow";
 import { Sparkline } from "../Sparkline";
 
 const MAX_ROWS = 6;
@@ -17,6 +18,7 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
 }) {
   const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
   useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
+  const win = useLiveWindow();
 
   const active = visible && toolOk && profileRunning;
   const rows = [...snap.stats].sort((a, b) => b.cpu - a.cpu).slice(0, MAX_ROWS);
@@ -24,8 +26,8 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
   const totalMem = snap.stats.reduce((n, s) => n + s.mem, 0);
   // One vertical scale for every sparkline so row heights stay comparable; the
   // history peak keeps that scale fixed instead of jumping with the busiest row.
-  const ceiling = Math.max(1, activityCpuPeak());
-  const totalHistory = activityTotals().cpu;
+  const ceiling = Math.max(1, activityCpuPeak(win));
+  const totalHistory = activityTotals().cpu.slice(-win);
   const totalCeiling = Math.max(100, ...(totalHistory.length ? totalHistory : [0]));
 
   return (
@@ -53,22 +55,22 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
       {active && !snap.error && rows.length > 0 && (
         <>
           <div className="activity-total">
-            <span className="strip-label">Total CPU · last 72 s</span>
-            {totalHistory.length < ACTIVITY_SAMPLES && (
-              <span className="activity-recorded">{Math.round(totalHistory.length * ACTIVITY_STEP_MS / 1000)} s of {ACTIVITY_WINDOW_S} s recorded</span>
+            <span className="strip-label">Total CPU · last {fmtSpan(win)}</span>
+            {totalHistory.length < win && (
+              <span className="activity-recorded">{totalHistory.length} s of {fmtSpan(win)} recorded</span>
             )}
             <span className="activity-total-value">{totalCpu.toFixed(1)}%</span>
           </div>
           <Sparkline
             values={totalHistory}
-            slots={ACTIVITY_SAMPLES} fit
+            slots={win} fit
             ceiling={totalCeiling}
             height={44}
-            label="Total CPU across containers over the last 72 seconds"
+            label={`Total CPU across containers over the last ${fmtSpan(win)}`}
           />
           <div className="activity-cols">
             <span>Container</span>
-            <span title="CPU over the last 72 seconds, shared vertical scale">
+            <span title={`CPU over the last ${fmtSpan(win)}, shared vertical scale`}>
               CPU history <span className="activity-scale">0–{ceiling.toFixed(1)}%</span>
             </span>
             <span>Now</span>
@@ -88,7 +90,7 @@ export function ActivityWidget({ setTab, openContainer, visible, toolOk, profile
                   {[0.25, 0.5, 0.75].map((f) => (
                     <line key={f} className="activity-spark-grid" x1={SPARK_W * f} y1="0" x2={SPARK_W * f} y2={SPARK_H} />
                   ))}
-                  <polyline points={activitySparkPoints(s.id, SPARK_W, SPARK_H, ceiling)} />
+                  <polyline points={activitySparkPoints(s.id, SPARK_W, SPARK_H, ceiling, win)} />
                 </svg>
                 <span className="activity-cpu">{s.cpu.toFixed(1)}%</span>
                 <span className="activity-mem">{fmtBytes(s.mem)}</span>

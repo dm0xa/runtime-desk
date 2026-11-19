@@ -26,6 +26,19 @@ export const parseHumanBytes = (s: string) => {
 export const fmtDateTime = (iso: string) =>
   iso ? iso.replace(/^(\d{4}-\d{2}-\d{2})T/, "$1 ").replace(/\.\d+/, "").replace(/(Z|[+-]\d{2}:?\d{2})$/, "") : "—";
 
+/** A chart window as the reader would say it: 72 -> "72 s", 120 -> "2 min", 5400 -> "1 h 30 min". */
+export const fmtSpan = (seconds: number) => {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 90) return `${s} s`;
+  if (s < 3600) {
+    const m = Math.round(s / 60);
+    return `${m} min`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  return m ? `${h} h ${m} min` : `${h} h`;
+};
+
 /** Guest uptime: 100280 -> "1d 3h", 5400 -> "1h 30m", 42 -> "42s". */
 export const fmtUptime = (seconds: number) => {
   if (!seconds) return "—";

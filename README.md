@@ -23,7 +23,7 @@ For macOS developers who want one console over [Colima](https://github.com/abios
 ## Highlights
 
 - **Dashboard with custom cards.** A KPI row (VM instances, running VMs, stopped VMs, allocated vCPUs), then resources, storage, Activity, Infrastructure, Instances, Recent containers and System Status; drag to reorder or into **Hidden cards**, cycle Auto, Half, Full, **Reset layout**.
-- **Activity monitor.** 72 seconds of per-container CPU history (36 samples, two seconds apart) plus memory, network, block I/O and PIDs; an OOM warning at 90% of a container's limit or the VM's.
+- **Activity monitor.** Two or ten minutes of per-container CPU history (120 or 600 one-second samples) plus memory, network, block I/O and PIDs; an OOM warning at 90% of a container's limit or the VM's.
 - **Docker lists you can act from.** Containers filter All, Compose, Docker, Kubernetes; Images and Volumes All, Unused; Networks All, User-defined; rows expand into facts, act in place and refuse removal while in use.
 - **Logs and inspect.** 100, 500, 1 000 or 5 000 lines, search with next/previous and **Match only**, error and warning lines coloured; inspect in its own sheet with the same search and line numbers.
 - **Sherlock.** What an object connects to: live stats, the last 60 log lines, env vars and labels with secret values masked until **Show N secrets**, health checks, build history, volume contents.

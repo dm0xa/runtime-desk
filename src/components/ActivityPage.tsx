@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
-import { fmtBytes, fmtSize } from "../lib/format";
+import { ACTIVITY_STEP_MS, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
+import { fmtBytes, fmtSize, fmtSpan } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { memoryPressure } from "../lib/memoryGuard";
+import { useLiveWindow } from "../lib/liveWindow";
 import { Sparkline } from "./Sparkline";
+import { ChartAxis } from "./ChartAxis";
+import { WindowSwitch } from "./WindowSwitch";
 import { FingerprintIcon } from "./icons";
 
 export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, onInvestigate }: {
@@ -17,6 +20,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
 }) {
   const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
   useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
+  const win = useLiveWindow();
 
   const stats = [...snap.stats].sort((a, b) => b.cpu - a.cpu);
   const totalCpu = stats.reduce((n, s) => n + s.cpu, 0);
@@ -28,14 +32,20 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
   const totalPids = stats.reduce((n, s) => n + s.pids, 0);
   // One fixed scale for every row, taken from the recorded history so rows stay
   // comparable and stop rescaling as the busiest container changes.
-  const rowCeiling = Math.max(1, activityCpuPeak());
+  const rowCeiling = Math.max(1, activityCpuPeak(win));
   const totals = activityTotals();
-  const cpuHistory = totals.cpu;
+  const cpuHistory = totals.cpu.slice(-win);
   const windowPeak = Math.max(0, ...cpuHistory);
   const ceiling = Math.max(100, windowPeak * 1.05);
-  const memPeak = Math.max(0, ...totals.mem);
-  const netPeak = Math.max(0, ...totals.netRxRate);
+  const memHistory = totals.mem.slice(-win);
+  const memPeak = Math.max(0, ...memHistory);
+  const netHistory = totals.netRxRate.slice(-win);
+  const netPeak = Math.max(0, ...netHistory);
   const netRateNow = totals.netRxRate[totals.netRxRate.length - 1] ?? 0;
+  /** How much of the selected window a series holds, in the reader's own terms. */
+  const recordedLabel = (n: number) => n >= win
+    ? `last ${fmtSpan(win)}`
+    : `${fmtSpan((n * ACTIVITY_STEP_MS) / 1000)} of ${fmtSpan(win)} recorded`;
   // Same threshold the OOM guard in the App uses, so the page and the notices agree.
   const pressure = memoryPressure(stats, vmMemoryBytes);
   const pressuredIds = new Set(pressure.map((p) => p.id));
@@ -53,6 +63,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
             <h3>Live totals</h3>
             <p className="muted">Streamed from <code>docker stats</code> at about 1 Hz while the monitor is on.</p>
           </div>
+          <WindowSwitch />
         </div>
 
         {!toolOk && <p className="muted">Docker CLI is not installed — live stats come from <code>docker stats</code>.</p>}
@@ -75,21 +86,22 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
           <>
             <div className="activity-chart">
               <div className="activity-chart-head">
-                <span className="strip-label">Total CPU · last 72 s</span>
+                <span className="strip-label">Total CPU · last {fmtSpan(win)}</span>
                 <span className="activity-chart-value">{loading ? "—" : `${totalCpu.toFixed(1)}%`}</span>
                 <span className="muted activity-chart-peak">
                   {cpuHistory.length > 1
-                    ? `peak ${windowPeak.toFixed(1)}% · ${cpuHistory.length >= ACTIVITY_SAMPLES ? `${ACTIVITY_WINDOW_S} s window` : `${Math.round(cpuHistory.length * ACTIVITY_STEP_MS / 1000)} s of ${ACTIVITY_WINDOW_S} s recorded`}`
+                    ? `peak ${windowPeak.toFixed(1)}% · ${recordedLabel(cpuHistory.length)}`
                     : "collecting samples…"}
                 </span>
               </div>
               <Sparkline
                 values={cpuHistory}
-                slots={ACTIVITY_SAMPLES} fit
+                slots={win} fit
                 ceiling={ceiling}
                 height={80}
-                label="Total CPU across containers over the last 72 seconds"
+                label={`Total CPU across containers over the last ${fmtSpan(win)}`}
               />
+              <ChartAxis seconds={(cpuHistory.length * ACTIVITY_STEP_MS) / 1000} />
             </div>
 
             <div className="activity-summary">
@@ -106,15 +118,17 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
                   <span className="inv-metric-label">Memory</span>
                   <span className="trend-value">{fmtBytes(totalMem)}</span>
                 </div>
-                <Sparkline values={totals.mem} slots={ACTIVITY_SAMPLES} fit ceiling={Math.max(memPeak * 1.2, 1)} label="Total memory across containers" />
-                <span className="inv-metric-sub">peak {fmtBytes(memPeak)} · {totals.mem.length >= ACTIVITY_SAMPLES ? `${ACTIVITY_WINDOW_S} s window` : `${Math.round(totals.mem.length * ACTIVITY_STEP_MS / 1000)} s of ${ACTIVITY_WINDOW_S} s recorded`}</span>
+                <Sparkline values={memHistory} slots={win} fit ceiling={Math.max(memPeak * 1.2, 1)} label={`Total memory across containers over the last ${fmtSpan(win)}`} />
+                <ChartAxis seconds={(memHistory.length * ACTIVITY_STEP_MS) / 1000} />
+                <span className="inv-metric-sub">peak {fmtBytes(memPeak)} · {recordedLabel(memHistory.length)}</span>
               </div>
               <div className="trend-card">
                 <div className="trend-head">
                   <span className="inv-metric-label">Network in</span>
                   <span className="trend-value">{fmtSize(netRateNow)}/s</span>
                 </div>
-                <Sparkline values={totals.netRxRate} slots={ACTIVITY_SAMPLES} fit label="Network receive rate across containers" />
+                <Sparkline values={netHistory} slots={win} fit label={`Network receive rate across containers over the last ${fmtSpan(win)}`} />
+                <ChartAxis seconds={(netHistory.length * ACTIVITY_STEP_MS) / 1000} />
                 <span className="inv-metric-sub">
                   {totals.netRxRate.length > 0 ? `peak ${fmtSize(netPeak)}/s · ${fmtSize(netRx)} received since start` : "waiting for a second sample…"}
                 </span>
@@ -142,7 +156,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
               <thead>
                 <tr>
                   <th>Container</th>
-                  <th title="CPU over the last 72 seconds, one vertical scale shared by every row">
+                  <th title={`CPU over the last ${fmtSpan(win)}, one vertical scale shared by every row`}>
                     CPU history <span className="activity-scale">0–{rowCeiling.toFixed(1)}%</span>
                   </th>
                   <th>Memory</th>
@@ -161,7 +175,7 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
                       <div className="ap-cpu">
                         <svg className="ap-spark" viewBox="0 0 120 22" preserveAspectRatio="none" aria-hidden="true">
                           <line className="activity-spark-base" x1="0" y1="21.5" x2="120" y2="21.5" />
-                          <polyline points={activitySparkPoints(s.id, 120, 22, rowCeiling)} fill="none" stroke="var(--green)" strokeWidth="1.4" strokeLinejoin="round" />
+                          <polyline points={activitySparkPoints(s.id, 120, 22, rowCeiling, win)} fill="none" stroke="var(--green)" strokeWidth="1.4" strokeLinejoin="round" />
                         </svg>
                         <span>{s.cpu.toFixed(1)}%</span>
                       </div>

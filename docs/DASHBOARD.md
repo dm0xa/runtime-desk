@@ -59,7 +59,7 @@ errors.
 | `docker-resources` | Docker Resources | Container, image, volume, network, Compose counts; pending read or failure named, never stale | Containers, Images, Volumes, Networks; Compose filtered | 2 | 2–4 | shown |
 | `podman-machines` | Podman Machines | Podman machines, green when one runs | Podman Machines | 1 | 1–2 | shown |
 | `podman-resources` | Podman Resources | Counts for the selected machine; missing Podman or machine named | Podman Containers, Images, Volumes, Networks | 2 | 2–4 | shown |
-| `activity` | Activity | Live 72-second CPU history, sparklines, CPU, memory for the six busiest containers | Card and header open Activity (`.card-action`, `role="link"`, Enter/Space); rows open Sherlock | 4 | 4 | shown |
+| `activity` | Activity | Live 2 or 10 minute CPU history, sparklines, CPU, memory for the six busiest containers | Card and header open Activity (`.card-action`, `role="link"`, Enter/Space); rows open Sherlock | 4 | 4 | shown |
 | `infrastructure` | Infrastructure | Lima VMs | Machine for Linux VMs | 2 | 2–4 | shown |
 | `system-status` | System Status | Installed and missing CLI tools | Settings · General (tool check, install) | 2 | 2–4 | shown |
 | `instances` | Instances | Profile table: runtime, architecture, resources | Chooses the profile | 4 | 4 | shown |

@@ -179,7 +179,7 @@ column says what the GUI exposes, not what Colima can do underneath.
 | Host networking | yes — `--net=host` | no | no |
 | eBPF | yes | no | no |
 | Native UI | yes | no | partial — native menu bar, web content |
-| Activity Monitor | yes — in-app plus `orb top` | no | yes — own Activity page, 1 Hz, 72 s CPU history |
+| Activity Monitor | yes — in-app plus `orb top` | no | yes — own Activity page, 1 Hz, 2 or 10 min CPU history |
 | Menu bar app | yes — status item with quick actions | no | no — app menu only |
 | Quick global actions | yes | no | partial — in-window actions only |
 | Kubernetes | yes — GUI, ClusterIP/NodePort/LB, wildcard domains | yes — k3s in the profile | yes — read-only objects, pod logs, start/stop/reset; no manifest apply |

@@ -1030,6 +1030,14 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .spark-area { fill: var(--spark-fill); }
 .spark-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .spark-line.secondary { stroke-width: 1.2; opacity: 0.55; }
+/* The x-axis a live chart otherwise leaves implicit: oldest recorded sample left, newest right. */
+.chart-axis { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 2px; font-size: 10px; line-height: 1.2; color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+/* One shared window for every live chart: two pills, so the choice reads without a menu. */
+.live-window { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 7px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--sep); }
+.live-window button { height: 20px; border: none; border-radius: 5px; padding: 0 8px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.live-window button:hover { color: var(--text); }
+.live-window button.on { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--sep); }
+.inv-head-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .volume-map-panel { margin: 12px 24px; }
 .volume-map { position: relative; margin-top: 4px; }
 .volume-cell { position: absolute; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: 1px; padding: 7px 9px; border: none; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--sep); color: var(--text); text-align: left; cursor: pointer; overflow: hidden; transition: box-shadow var(--dur) var(--ease); }
@@ -1508,7 +1516,7 @@ html.widget-drag .eye-btn { opacity: 0.65; transition: none; }
 .activity-empty { font-size: 12px; color: var(--muted); padding: 8px 0; }
 .activity-total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 0; }
 .activity-total-value { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-/* A strip labelled "last 72 s" says how much of that window it actually holds. */
+/* A strip labelled with the selected window says how much of it it actually holds. */
 .activity-recorded { margin-left: auto; font-size: 11.5px; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; }
 .activity-card .spark { height: 44px; margin: 4px 0 8px; }
 
