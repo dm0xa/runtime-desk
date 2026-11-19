@@ -274,9 +274,32 @@ const blankForm = {
   mount_inotify: false, mounts: [{ location: "~", writable: true }] as { location: string; writable: boolean }[],
 };
 
-/** One `--mount` value: Colima's `:w`/`:ro` suffix, never a raw path that reads as a flag. */
-function mountArg(m: { location: string; writable: boolean }) {
-  return `${m.location.trim()}:${m.writable ? "w" : "ro"}`;
+/** One `--mount` value: `path[:mountpoint][:w]`. No suffix at all means read-only. */
+function mountArg(m: { location: string; mount_point?: string; writable: boolean }) {
+  const path = m.location.trim();
+  const point = m.mount_point?.trim();
+  const suffix = point ? `:${point}` : "";
+  return m.writable ? `${path}${suffix}:w` : `${path}${suffix}`;
+}
+
+/** An empty list must become `none`: no `--mount` flag makes Colima add the home directory. */
+function mountArgs(mounts: { location: string; mount_point?: string; writable: boolean }[]) {
+  const args = mounts.filter((m) => m.location.trim()).map(mountArg);
+  return args.length ? args : ["none"];
+}
+
+/** Repeated `--dns` values; the form holds them as one comma/space-separated line. */
+function dnsArgs(text: string) {
+  return text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Repeated `--dns-host` values. `name = target` is normalised, since Colima does not trim. */
+function dnsHostArgs(text: string) {
+  return text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
+    .map((entry) => {
+      const [name, ...target] = entry.split("=");
+      return `${name.trim()}=${target.join("=").trim()}`;
+    });
 }
 
 /** The create form keeps text where Colima takes repeated flags; this is the one conversion. */
@@ -285,14 +308,17 @@ function startPayload(f: typeof blankForm) {
     profile: f.profile, cpus: f.cpus, memory: f.memory, disk: f.disk, runtime: f.runtime,
     arch: f.arch, vm_type: f.vm_type, rosetta: f.rosetta, hostname: f.hostname,
     kubernetes: f.kubernetes, k3s_arg: f.k3s_arg,
-    network_mode: f.network_mode, network_interface: f.network_interface,
+    network_mode: f.network_mode,
+    // Bridged is the only mode that reads the interface; sending en0 in shared mode is noise.
+    network_interface: f.network_mode === "bridged" ? f.network_interface : undefined,
     network_address: f.network_address, network_preferred_route: f.network_preferred_route,
-    network_host_addresses: f.network_host_addresses, gateway_address: f.gateway_address,
-    dns: f.dns.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
-    dns_hosts: f.dns_hosts.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+    network_host_addresses: f.network_host_addresses,
+    gateway_address: f.gateway_address.trim() || undefined,
+    dns: dnsArgs(f.dns),
+    dns_hosts: dnsHostArgs(f.dns_hosts),
     port_forwarder: f.port_forwarder, ssh_agent: f.ssh_agent,
     mount_type: f.mount_type, mount_inotify: f.mount_inotify,
-    mounts: f.mounts.filter((m) => m.location.trim()).map(mountArg),
+    mounts: mountArgs(f.mounts),
   };
 }
 
@@ -324,6 +350,8 @@ function App() {
   /** The tray listener is registered once; it must read the current selection at click time. */
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  /** `act` closes over `selected` and the current refresh; the listener holds the latest one. */
+  const trayActionRef = useRef<(action: string) => void>(() => {});
   const [status, setStatus] = useState<Status | null>(null);
   const [version, setVersion] = useState("");
   const [containers, setContainers] = useState<Container[]>([]);
@@ -383,6 +411,9 @@ function App() {
   const imagesRef = useRef<Image[]>([]);
   const containersRef = useRef<Container[]>([]);
   const [busy, setBusy] = useState(false);
+  /** The tray can fire while a window action is mid-flight; `busy` is state, so mirror it. */
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [refreshing, setRefreshing] = useState(false);
   /** Bumped per refresh; a late answer from an older one is dropped. */
   const refreshGen = useRef(0);
@@ -412,7 +443,8 @@ function App() {
   const [recreate, setRecreate] = useState<{
     arch: string; vm_type: string; runtime: string; mount_type: string;
     network_mode: string; network_interface: string; network_address: boolean;
-    rosetta: boolean; keep_data: boolean; confirm: string;
+    rosetta: boolean; kubernetes: boolean; keep_data: boolean; confirm: string;
+    dns: string; dns_hosts: string;
   } | null>(null);
   const [networkScope, setNetworkScope] = useState<NetworkScope | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -929,8 +961,9 @@ function App() {
     setRecreate({
       arch: cfg.arch, vm_type: cfg.vm_type, runtime: cfg.runtime, mount_type: cfg.mount_type,
       network_mode: cfg.network_mode, network_interface: cfg.network_interface,
-      network_address: cfg.network_address, rosetta: cfg.rosetta,
+      network_address: cfg.network_address, rosetta: cfg.rosetta, kubernetes: cfg.kubernetes,
       keep_data: true, confirm: "",
+      dns: cfg.dns.join(", "), dns_hosts: cfg.dns_hosts.map((h) => `${h.name}=${h.target}`).join(", "),
     });
   }
   const openCreateRef = useRef(openCreate);
@@ -1437,12 +1470,7 @@ function App() {
     // the refresh that follows, so the tray never runs the CLI on its own.
     let stop: (() => void) | undefined;
     let alive = true;
-    listen<string>("tray", (event) => {
-      const profile = selectedRef.current;
-      if (!profile) return;
-      if (event.payload === "tray-start") void act(() => invoke("start_cmd", { opts: { profile } }));
-      if (event.payload === "tray-stop") void act(() => invoke("stop_cmd", { profile }));
-    })
+    listen<string>("tray", (event) => trayActionRef.current(event.payload))
       .then((unlisten) => { if (alive) stop = unlisten; else unlisten(); })
       .catch(() => {});
     return () => { alive = false; stop?.(); };
@@ -1481,6 +1509,14 @@ function App() {
     } catch (e) { reportProblem(e); }
     finally { setBusy(false); }
   }
+  // The tray registers its listener once; rebinding here keeps Start/Stop on the profile that
+  // is selected now, and makes `act` refresh and report against that same profile.
+  trayActionRef.current = (action) => {
+    const profile = selectedRef.current;
+    if (!profile || busyRef.current || !profiles.some((p) => p.name === profile)) return;
+    if (action === "tray-start") void act(() => invoke("start_cmd", { opts: { profile } }));
+    if (action === "tray-stop") void act(() => invoke("stop_cmd", { profile }));
+  };
 
   const [sorts, setSorts] = useState<Record<string, { key: string; dir: 1 | -1 }>>({});
   function toggleSort(table: string, key: string) {
@@ -1772,6 +1808,7 @@ function App() {
     void invoke("tray_sync_cmd", {
       profile: profiles.length === 0 ? "No profile" : selected,
       running: selectedRunning,
+      available: profiles.length > 0,
     }).catch(() => {});
   }, [selected, selectedRunning, profiles.length]);
   const diskLimitBytes = profiles.find((p) => p.name === selected)?.disk ?? 0;
@@ -3001,7 +3038,7 @@ function App() {
                     >{diag.rosetta_active ? "active" : "not registered"}</span>
                   )}</strong></div>
                   <div className="kv"><span>Mount type</span><strong>{status?.mount_type ?? cfg?.mount_type ?? "—"} <span className="muted">· create-time</span></strong></div>
-                  <div className="kv"><span>Mounts</span><strong>{cfg ? (cfg.mounts.length ? cfg.mounts.map((m) => `${m.location} (${m.writable ? "rw" : "ro"})`).join(", ") : "none") : "—"}</strong></div>
+                  <div className="kv"><span>Mounts</span><strong>{cfg ? (cfg.mounts.length ? cfg.mounts.map((m) => `${m.location}${m.mount_point ? ` → ${m.mount_point}` : ""} (${m.writable ? "rw" : "ro"})`).join(", ") : "none") : "—"}</strong></div>
                   <div className="kv"><span>Mount inotify</span><strong>{cfg ? (cfg.mount_inotify ? "on" : "off") : "—"}</strong></div>
                   <div className="kv"><span>SSH agent</span><strong>{cfg ? (cfg.ssh_agent ? "forwarded" : "off") : "—"}</strong></div>
                 </section>
@@ -3581,7 +3618,8 @@ function App() {
                   runtime: status?.runtime ?? undefined,
                   vm_type: cfg?.vm_type ?? undefined,
                 } });
-                activateProfile(selected).catch(() => undefined);
+                await activateProfile(selected);
+                await loadConfig(selected);
                 setResize(null);
                 return `${selected} started`;
               })}
@@ -3611,30 +3649,40 @@ function App() {
           <div className="field">
             <label>DNS resolvers</label>
             <input value={netEdit.dns} aria-label="DNS resolvers" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="1.1.1.1, 8.8.8.8" onChange={(e) => setNetEdit({ ...netEdit, dns: e.target.value })} />
+            {!!cfg?.dns.length && !netEdit.dns.trim() && (
+              <div className="field-hint bad">Colima has no flag that removes resolvers. Keep at least one, or use Recreate… for a fresh VM.</div>
+            )}
           </div>
           <div className="field">
             <label>DNS hosts</label>
             <input value={netEdit.dns_hosts} aria-label="DNS hosts" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="myapp.local=192.168.1.100" onChange={(e) => setNetEdit({ ...netEdit, dns_hosts: e.target.value })} />
+            {!!cfg?.dns_hosts.length && !netEdit.dns_hosts.trim() && (
+              <div className="field-hint bad">Colima has no flag that removes DNS hosts. Keep one, or use Recreate… for a fresh VM.</div>
+            )}
           </div>
           <div className="field">
             <label>Gateway</label>
             <input value={netEdit.gateway_address} aria-label="Gateway address" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setNetEdit({ ...netEdit, gateway_address: e.target.value })} />
+            <div className="field-hint">Empty resets to Colima's default, <code>192.168.5.2</code>.</div>
           </div>
           <div className="modal-actions">
             <button className="btn ghost" disabled={busy} onClick={() => setNetEdit(null)}>Cancel</button>
             <button
               className="btn primary"
-              disabled={busy || selectedRunning}
+              disabled={busy || selectedRunning
+                || (!!cfg?.dns.length && !netEdit.dns.trim())
+                || (!!cfg?.dns_hosts.length && !netEdit.dns_hosts.trim())}
               title={selectedRunning ? "Stop the profile first: colima start applies these" : undefined}
               onClick={() => act(async () => {
                 await invoke("start_cmd", { opts: {
                   profile: selected,
-                  dns: netEdit.dns.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
-                  dns_hosts: netEdit.dns_hosts.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+                  dns: dnsArgs(netEdit.dns),
+                  dns_hosts: dnsHostArgs(netEdit.dns_hosts),
                   port_forwarder: netEdit.port_forwarder,
-                  gateway_address: netEdit.gateway_address,
+                  // An empty field must mean the default, not "leave the old custom gateway".
+                  gateway_address: netEdit.gateway_address.trim() || "192.168.5.2",
                 } });
-                activateProfile(selected).catch(() => undefined);
+                await activateProfile(selected);
                 await loadConfig(selected);
                 setNetEdit(null);
                 return `${selected} started with the new network settings`;
@@ -3649,15 +3697,16 @@ function App() {
           <h2>Recreate {selected}</h2>
           <p className="muted">
             Colima reads architecture, VM type, runtime, mount type and network mode only when it creates the
-            VM. Changing one means deleting and starting it again.
+            VM. Changing one means deleting and starting it again. Settings this app does not edit — Docker
+            daemon config, environment variables, CPU type — are not carried over.
           </p>
           <div className="row2">
             <div className="field"><label>Arch</label><Select label="Architecture" minWidth={0} value={recreate.arch} options={[{ value: "aarch64", label: "aarch64" }, { value: "x86_64", label: "x86_64" }]} onChange={(v) => setRecreate({ ...recreate, arch: v, vm_type: normalizeArch(v) === hostArch ? recreate.vm_type : "qemu", rosetta: normalizeArch(v) === hostArch ? recreate.rosetta : false, mount_type: normalizeArch(v) !== hostArch && recreate.mount_type === "virtiofs" ? "9p" : recreate.mount_type })} /></div>
             <div className="field"><label>VM type</label><Select label="VM type" minWidth={0} value={recreate.vm_type} options={[{ value: "vz", label: "vz" }, { value: "qemu", label: "qemu" }, { value: "krunkit", label: "krunkit" }]} onChange={(v) => setRecreate({ ...recreate, vm_type: v, rosetta: v === "vz" ? recreate.rosetta : false, mount_type: v !== "vz" && recreate.mount_type === "virtiofs" ? "9p" : recreate.mount_type })} /></div>
-            <div className="field"><label>Runtime</label><Select label="Runtime" minWidth={0} value={recreate.runtime} options={[{ value: "docker", label: "docker" }, { value: "containerd", label: "containerd" }, { value: "incus", label: "incus" }]} onChange={(v) => setRecreate({ ...recreate, runtime: v })} /></div>
+            <div className="field"><label>Runtime</label><Select label="Runtime" minWidth={0} value={recreate.runtime} options={[{ value: "docker", label: "docker" }, { value: "containerd", label: "containerd" }, { value: "incus", label: "incus" }]} onChange={(v) => setRecreate({ ...recreate, runtime: v, kubernetes: v === "incus" ? false : recreate.kubernetes })} /></div>
           </div>
           <div className="row2">
-            <div className="field"><label>Mount type</label><Select label="Mount type" minWidth={0} value={recreate.mount_type} options={[{ value: "virtiofs", label: "virtiofs" }, { value: "9p", label: "9p" }, { value: "sshfs", label: "sshfs" }]} onChange={(v) => setRecreate({ ...recreate, mount_type: v })} /></div>
+            <div className="field"><label>Mount type</label><Select label="Mount type" minWidth={0} value={recreate.mount_type} options={[...(recreate.vm_type === "vz" ? [{ value: "virtiofs", label: "virtiofs" }] : []), { value: "9p", label: "9p" }, { value: "sshfs", label: "sshfs" }]} onChange={(v) => setRecreate({ ...recreate, mount_type: v })} /></div>
             <div className="field"><label>Network mode</label><Select label="Network mode" minWidth={0} value={recreate.network_mode} options={[{ value: "shared", label: "shared" }, { value: "bridged", label: "bridged" }]} onChange={(v) => setRecreate({ ...recreate, network_mode: v })} /></div>
             <div className="field"><label>Interface</label><input value={recreate.network_interface} disabled={recreate.network_mode !== "bridged"} aria-label="Network interface" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setRecreate({ ...recreate, network_interface: e.target.value })} /></div>
           </div>
@@ -3666,6 +3715,20 @@ function App() {
           </div>
           <div className="field">
             <label className="check"><input type="checkbox" disabled={recreate.vm_type !== "vz" || normalizeArch(recreate.arch) !== "arm64"} checked={recreate.rosetta} onChange={(e) => setRecreate({ ...recreate, rosetta: e.target.checked })} /> Rosetta (amd64 emulation)</label>
+          </div>
+          <div className="field">
+            <label className="check"><input type="checkbox" disabled={recreate.runtime === "incus"} checked={recreate.kubernetes} onChange={(e) => setRecreate({ ...recreate, kubernetes: e.target.checked })} /> Kubernetes (k3s){recreate.runtime === "incus" ? <span className="muted"> — needs docker or containerd</span> : null}</label>
+            <div className="field-hint">Tick this if the cluster was enabled later from the Kubernetes page: that does not set the profile's <code>kubernetes</code> config flag.</div>
+          </div>
+          <div className="field">
+            <label>DNS resolvers</label>
+            <input value={recreate.dns} aria-label="DNS resolvers" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="1.1.1.1, 8.8.8.8" onChange={(e) => setRecreate({ ...recreate, dns: e.target.value })} />
+            <div className="field-hint">Comma-separated. Clear it to start the new VM without custom resolvers.</div>
+          </div>
+          <div className="field">
+            <label>DNS hosts</label>
+            <input value={recreate.dns_hosts} aria-label="DNS hosts" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="myapp.local=192.168.1.100" onChange={(e) => setRecreate({ ...recreate, dns_hosts: e.target.value })} />
+            <div className="field-hint">Clear it to drop every custom DNS host with the old VM.</div>
           </div>
           <fieldset className="field">
             <legend>Container data</legend>
@@ -3693,21 +3756,25 @@ function App() {
                     runtime: recreate.runtime, arch: recreate.arch, vm_type: recreate.vm_type,
                     rosetta: recreate.rosetta && recreate.vm_type === "vz" && normalizeArch(recreate.arch) === "arm64",
                     hostname: cfg?.hostname,
-                    kubernetes: cfg?.kubernetes, k3s_arg: cfg?.k3s_args.join(","),
+                    kubernetes: recreate.kubernetes,
+                    k3s_arg: recreate.kubernetes ? cfg?.k3s_args.join(",") : "",
                     mount_type: recreate.mount_type, mount_inotify: cfg?.mount_inotify,
-                    mounts: cfg?.mounts.map(mountArg),
-                    network_mode: recreate.network_mode, network_interface: recreate.network_interface,
+                    mounts: mountArgs(cfg?.mounts ?? []),
+                    network_mode: recreate.network_mode,
+                    network_interface: recreate.network_mode === "bridged" ? recreate.network_interface : undefined,
                     network_address: recreate.network_address,
                     network_preferred_route: cfg?.network_preferred_route,
                     network_host_addresses: cfg?.network_host_addresses,
                     gateway_address: cfg?.gateway_address,
-                    dns: cfg?.dns,
-                    dns_hosts: cfg?.dns_hosts.map((h) => `${h.name}=${h.target}`),
+                    dns: dnsArgs(recreate.dns),
+                    dns_hosts: dnsHostArgs(recreate.dns_hosts),
                     port_forwarder: cfg?.port_forwarder, ssh_agent: cfg?.ssh_agent,
                   },
                   deleteData: !recreate.keep_data,
                 });
-                await activateProfile(selected);
+                // The runtime may have changed: read the profile again so the client (docker
+                // vs nerdctl) is picked for the new engine, not the one the list still holds.
+                await activateProfile(selected, await safe(invoke<Profile[]>("list_profiles_cmd"), []));
                 await loadConfig(selected);
                 setRecreate(null);
                 return `${selected} recreated`;
@@ -3865,7 +3932,7 @@ function App() {
             <div className="field">
               <label>Mount type</label>
               <Select label="Mount type" minWidth={0} value={form.mount_type} options={[
-                { value: "virtiofs", label: "virtiofs — fastest, needs vz" },
+                ...(form.vm_type === "vz" ? [{ value: "virtiofs", label: "virtiofs — fastest, needs vz" }] : []),
                 { value: "9p", label: "9p — qemu's stable choice" },
                 { value: "sshfs", label: "sshfs — most compatible" },
               ]} onChange={(v) => setForm({ ...form, mount_type: v })} />
@@ -3908,7 +3975,7 @@ function App() {
                 <Select label="Network mode" minWidth={0} value={form.network_mode} options={[
                   { value: "shared", label: "shared" }, { value: "bridged", label: "bridged" },
                 ]} onChange={(v) => setForm({ ...form, network_mode: v })} />
-                <div className="field-hint">Bridged gives the VM a LAN address. Create-time.</div>
+                <div className="field-hint">Bridged gives the VM a LAN address and needs root. Create-time.</div>
               </div>
               <div className="field">
                 <label>Interface</label>

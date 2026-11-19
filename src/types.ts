@@ -291,7 +291,7 @@ export type CleanupReport = {
   log_files: CleanupLogFile[];
   error: string | null;
 };
-export type MountSpec = { location: string; writable: boolean };
+export type MountSpec = { location: string; mount_point?: string; writable: boolean };
 export type DnsHost = { name: string; target: string };
 export type ProfileConfig = {
   vm_type: string;

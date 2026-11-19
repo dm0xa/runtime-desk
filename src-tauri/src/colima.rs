@@ -386,6 +386,9 @@ pub struct DnsHost {
 #[derive(Deserialize, Clone, serde::Serialize, Debug, PartialEq)]
 pub struct MountSpec {
     pub location: String,
+    /// Where the host path appears inside the VM; `None` keeps Colima's default.
+    #[serde(default)]
+    pub mount_point: Option<String>,
     pub writable: bool,
 }
 
@@ -429,7 +432,9 @@ impl Default for ProfileConfig {
             network_address: false, network_preferred_route: false, network_host_addresses: false,
             gateway_address: "192.168.5.2".into(), dns: Vec::new(), dns_hosts: Vec::new(),
             port_forwarder: "ssh".into(), ssh_agent: false, mount_inotify: false,
-            mounts: vec![MountSpec { location: "~".into(), writable: true }],
+            // Colima: an absent or `null` mounts key means none; an explicit `[]` means the
+            // home directory (config.MountsOrDefault). The form sets its own home default.
+            mounts: Vec::new(),
             hostname: String::new(), kubernetes: false, k3s_args: Vec::new(),
         }
     }
@@ -587,7 +592,13 @@ impl ProfileConfig {
         if let Some(v) = root.get("portForwarder").and_then(Yaml::text) { cfg.port_forwarder = v.into(); }
         if let Some(v) = root.get("forwardAgent") { cfg.ssh_agent = v.flag(); }
         if let Some(v) = root.get("mountInotify") { cfg.mount_inotify = v.flag(); }
-        if let Some(v) = root.get("mounts") { cfg.mounts = mounts_from(v); }
+        if let Some(v) = root.get("mounts") {
+            cfg.mounts = match v {
+                // `mounts: []` is Colima's default home mount, not "no mounts".
+                Yaml::List(items) if items.is_empty() => vec![MountSpec { location: "~".into(), mount_point: None, writable: true }],
+                _ => mounts_from(v),
+            };
+        }
         if let Some(k8s) = root.get("kubernetes") {
             if let Some(v) = k8s.get("enabled") { cfg.kubernetes = v.flag(); }
             if let Some(v) = k8s.get("k3sArgs") {
@@ -622,10 +633,11 @@ fn mounts_from(value: &Yaml) -> Vec<MountSpec> {
             let location = item.get("location").and_then(Yaml::text)?;
             Some(MountSpec {
                 location: location.into(),
+                mount_point: item.get("mountPoint").and_then(Yaml::text).map(str::to_string),
                 writable: item.get("writable").map(Yaml::flag).unwrap_or(false),
             })
         }
-        Yaml::Scalar(s) if !s.is_empty() && s != "null" => Some(MountSpec { location: s.clone(), writable: false }),
+        Yaml::Scalar(s) if !s.is_empty() && s != "null" => Some(MountSpec { location: s.clone(), mount_point: None, writable: false }),
         _ => None,
     }).collect()
 }
@@ -769,7 +781,7 @@ pub fn validate_start(o: &StartOpts) -> Result<(), String> {
             return Err(format!("Network interface {iface:?} is not an interface name"));
         }
     }
-    if let Some(gateway) = o.gateway_address.as_deref() {
+    if let Some(gateway) = o.gateway_address.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         match gateway.parse::<std::net::Ipv4Addr>() {
             Ok(ip) if ip.octets()[3] == 2 => {}
             Ok(_) => return Err(format!("Gateway {gateway} must end in .2: Colima uses the last octet for the host")),
@@ -789,11 +801,27 @@ pub fn validate_start(o: &StartOpts) -> Result<(), String> {
             return Err(format!("DNS host {host:?} must be name=target"));
         }
     }
-    for mount in o.mounts.iter().flatten() {
-        let mount = mount.trim();
-        if mount.is_empty() { return Err("A mount cannot be empty".into()); }
+    let mounts: Vec<&str> = o.mounts.iter().flatten().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+    if mounts.iter().any(|m| m.eq_ignore_ascii_case("none")) && mounts.len() > 1 {
+        return Err("`none` disables every mount; it cannot be combined with a path".into());
+    }
+    for mount in mounts {
         if mount.starts_with('-') { return Err(format!("Mount {mount:?} cannot start with '-'")); }
         if mount.contains(',') { return Err(format!("Mount {mount:?} cannot contain a comma: Colima splits the list there")); }
+        // Colima splits on ':' and rejects spaces (Lima cannot mount them), silently otherwise.
+        if mount.contains(' ') { return Err(format!("Mount {mount:?} cannot contain a space: Lima cannot mount it")); }
+        // Colima reads `location[:mountpoint][:w]`; anything else in a suffix is ignored.
+        if mount != "none" {
+            let parts: Vec<&str> = mount.split(':').collect();
+            let suffix_ok = |p: &str| p.is_empty() || p.starts_with('/') || p.eq_ignore_ascii_case("w");
+            if parts[0].is_empty() {
+                return Err(format!("Mount {mount:?} needs a path before any suffix"));
+            }
+            if parts.len() > 3 || !suffix_ok(parts.get(1).copied().unwrap_or(""))
+                || !suffix_ok(parts.get(2).copied().unwrap_or("")) {
+                return Err(format!("Mount {mount:?} must be path, path:mountpoint or path:w"));
+            }
+        }
     }
     Ok(())
 }
@@ -823,18 +851,21 @@ fn start_args(o: &StartOpts) -> Vec<String> {
         if !mount.trim().is_empty() { a.push("--mount".into()); a.push(mount.trim().to_string()); }
     }
     if o.mount_inotify == Some(true) { a.push("--mount-inotify".into()); }
-    if let Some(v) = &o.hostname { if !v.trim().is_empty() { a.push("--hostname".into()); a.push(v.clone()); } }
+    if let Some(v) = &o.hostname { let v = v.trim(); if !v.is_empty() { a.push("--hostname".into()); a.push(v.to_string()); } }
     if let Some(v) = &o.network_mode { a.push("--network-mode".into()); a.push(v.clone()); }
-    if let Some(v) = &o.network_interface { a.push("--network-interface".into()); a.push(v.clone()); }
+    if let Some(v) = &o.network_interface { a.push("--network-interface".into()); a.push(v.trim().to_string()); }
     if o.network_address == Some(true) { a.push("--network-address".into()); }
     if o.network_preferred_route == Some(true) { a.push("--network-preferred-route".into()); }
     if o.network_host_addresses == Some(true) { a.push("--network-host-addresses".into()); }
-    if let Some(v) = &o.gateway_address { if !v.trim().is_empty() { a.push("--gateway-address".into()); a.push(v.clone()); } }
+    if let Some(v) = &o.gateway_address { let v = v.trim(); if !v.is_empty() { a.push("--gateway-address".into()); a.push(v.to_string()); } }
     for dns in o.dns.iter().flatten() {
         if !dns.trim().is_empty() { a.push("--dns".into()); a.push(dns.trim().to_string()); }
     }
     for host in o.dns_hosts.iter().flatten() {
-        if !host.trim().is_empty() { a.push("--dns-host".into()); a.push(host.trim().to_string()); }
+        if let Some((name, target)) = host.split_once('=') {
+            a.push("--dns-host".into());
+            a.push(format!("{}={}", name.trim(), target.trim()));
+        }
     }
     if let Some(v) = &o.port_forwarder { a.push("--port-forwarder".into()); a.push(v.clone()); }
     if o.ssh_agent == Some(true) { a.push("--ssh-agent".into()); }
@@ -855,13 +886,14 @@ pub fn start(o: &StartOpts) -> Result<String, String> {
 /// disk; without it Colima keeps images and containers on the profile's disk.
 pub fn recreate(o: &StartOpts, delete_data: bool) -> Result<String, String> {
     validate_start(o)?;
-    let running = list_profiles().unwrap_or_default().iter()
-        .any(|p| p.name == o.profile && p.status == "Running");
-    let stopped = if running { stop(&o.profile)? } else { String::new() };
+    // `colima delete` tears down a running VM (containers, then the VM), so a separate stop
+    // only adds a stale-list failure mode and a second CLI round trip.
     let deleted = delete(&o.profile, delete_data, true).map_err(|e| format!("delete: {e}"))?;
-    let started = start(o).map_err(|e| format!("start: {e}"))?;
+    let started = start(o).map_err(|e| {
+        format!("The VM was deleted, but starting it with the new settings failed: {e}")
+    })?;
     let mut out = String::new();
-    for step in [stopped, deleted, started] {
+    for step in [deleted, started] {
         if !step.trim().is_empty() { if !out.is_empty() { out.push('\n'); } out.push_str(step.trim()); }
     }
     Ok(out)
@@ -1444,7 +1476,7 @@ mod tests {
             dns_hosts: Some(vec!["example.com=1.2.3.4".into()]),
             port_forwarder: Some("grpc".into()), ssh_agent: Some(true),
             mount_type: Some("virtiofs".into()), mount_inotify: Some(true),
-            mounts: Some(vec!["~/projects:w".into(), "/data:ro".into()]),
+            mounts: Some(vec!["~/projects:w".into(), "/data".into()]),
             ..opts("work", None, None)
         };
         super::validate_start(&o).unwrap();
@@ -1461,6 +1493,7 @@ mod tests {
         assert_eq!(args.iter().filter(|a| *a == "--mount").count(), 2);
         assert!(joined.contains("--dns-host example.com=1.2.3.4"), "{args:?}");
         assert!(joined.contains("--mount ~/projects:w"), "{args:?}");
+        assert!(joined.contains("--mount /data"), "{args:?}");
     }
 
     #[test]
@@ -1482,6 +1515,23 @@ mod tests {
 
         let qemu_virtiofs = super::StartOpts { vm_type: Some("qemu".into()), mount_type: Some("virtiofs".into()), ..opts("default", None, None) };
         assert!(super::validate_start(&qemu_virtiofs).unwrap_err().contains("virtiofs"));
+
+        let spaced = super::StartOpts { mounts: Some(vec!["/My Projects:w".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&spaced).unwrap_err().contains("space"));
+
+        let ro = super::StartOpts { mounts: Some(vec!["~/a:ro".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&ro).unwrap_err().contains("path:w"));
+
+        let no_path = super::StartOpts { mounts: Some(vec![":w".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&no_path).unwrap_err().contains("needs a path"));
+
+        let mixed = super::StartOpts { mounts: Some(vec!["none".into(), "~:w".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&mixed).unwrap_err().contains("none"));
+
+        let valid = super::StartOpts { mounts: Some(vec!["none".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&valid).is_ok());
+        let valid = super::StartOpts { mounts: Some(vec!["~/a:/data:w".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&valid).is_ok(), "path:mountpoint:w must pass");
     }
 
     #[test]
@@ -1537,22 +1587,30 @@ mounts:
         assert!(cfg.kubernetes);
         assert_eq!(cfg.k3s_args, ["--disable=traefik,servicelb"]);
         assert_eq!(cfg.mounts, [
-            super::MountSpec { location: "~".into(), writable: true },
-            super::MountSpec { location: "/data".into(), writable: false },
+            super::MountSpec { location: "~".into(), mount_point: None, writable: true },
+            super::MountSpec { location: "/data".into(), mount_point: None, writable: false },
         ]);
     }
 
     #[test]
-    fn missing_and_disabled_mount_blocks_have_distinct_meanings() {
-        // No `mounts:` key: Colima's default home mount.
-        let defaulted = super::ProfileConfig::from_yaml(&super::parse_yaml("cpu: 2\nnetwork:\n  dns: null\n"));
-        assert_eq!(defaulted.mounts, [super::MountSpec { location: "~".into(), writable: true }]);
-        assert!(defaulted.dns.is_empty());
-        assert_eq!(defaulted.network_mode, "shared");
+    fn mount_defaults_follow_colima_not_yaml_intuition() {
+        // No `mounts:` key is a nil slice in Go: no mounts.
+        let absent = super::ProfileConfig::from_yaml(&super::parse_yaml("cpu: 2\nnetwork:\n  dns: null\n"));
+        assert!(absent.mounts.is_empty());
+        assert!(absent.dns.is_empty());
+        assert_eq!(absent.network_mode, "shared");
 
-        // `mounts: []` is an explicit "no mounts", not the default.
-        let disabled = super::ProfileConfig::from_yaml(&super::parse_yaml("mounts: []\n"));
+        // `mounts: []` makes Colima inject the home directory (config.MountsOrDefault).
+        let home = super::ProfileConfig::from_yaml(&super::parse_yaml("mounts: []\n"));
+        assert_eq!(home.mounts, [super::MountSpec { location: "~".into(), mount_point: None, writable: true }]);
+
+        // `mounts: null` is the documented way to disable every mount.
+        let disabled = super::ProfileConfig::from_yaml(&super::parse_yaml("mounts: null\n"));
         assert!(disabled.mounts.is_empty());
+
+        // A hand-edited mount point must survive into Recreate, which re-emits `path:point:w`.
+        let pointed = super::ProfileConfig::from_yaml(&super::parse_yaml("mounts:\n  - location: /host/a\n    mountPoint: /mnt/a\n    writable: true\n"));
+        assert_eq!(pointed.mounts[0].mount_point.as_deref(), Some("/mnt/a"));
 
         let inline_dns = super::ProfileConfig::from_yaml(&super::parse_yaml("network:\n  dns: [9.9.9.9, 1.1.1.1]\n"));
         assert_eq!(inline_dns.dns, ["9.9.9.9", "1.1.1.1"]);

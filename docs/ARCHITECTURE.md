@@ -34,7 +34,7 @@ Command groups (99 total):
 - **Podman objects** (24): `podman_containers_cmd`, `podman_container_start_cmd`, `podman_container_stop_cmd`, `podman_container_restart_cmd`, `podman_container_remove_cmd`, `podman_container_logs_cmd`, `podman_container_detail_cmd`, `podman_container_inspect_json_cmd`, `podman_container_stats_cmd`, `podman_images_cmd`, `podman_image_pull_cmd`, `podman_image_remove_cmd`, `podman_image_detail_cmd`, `podman_image_inspect_cmd`, `podman_volumes_cmd`, `podman_volume_remove_cmd`, `podman_volume_detail_cmd`, `podman_volume_inspect_cmd`, `podman_networks_cmd`, `podman_network_remove_cmd`, `podman_network_detail_cmd`, `podman_network_inspect_cmd`, `podman_network_map_cmd`, `podman_disk_usage_cmd`
 - **Kubernetes** (4): `k8s_cluster_cmd`, `k8s_resources_cmd`, `k8s_logs_cmd`, `k8s_cluster_action_cmd`
 - **Host tools** (2): `system_status_cmd`, `lima_vms_cmd`
-- **Desktop** (2): `open_url_cmd` — http and https only; anything else is refused before `open` runs; `tray_sync_cmd` — rebuilds the menu-bar item for the selected profile and its running state
+- **Desktop** (2): `open_url_cmd` — http and https only; anything else is refused before `open` runs; `tray_sync_cmd` — rebuilds the menu-bar item for the selected profile, its running state and whether a profile exists
 
 ### `src-tauri/src/colima.rs`
 
@@ -134,7 +134,7 @@ Items that change what the window shows never act on their own: `dispatch()` emi
 
 ### `src-tauri/src/tray.rs`
 
-The menu-bar item: the bundle icon plus a menu that names the selected profile and its state, with **Start**, **Stop**, **Show Runtime Desk** and **Quit**. `tray_sync_cmd` rebuilds it whenever the window's selection or running state changes; like the app menu, Start/Stop emit a `tray` event and the window runs the same `start_cmd`/`stop_cmd` path it uses everywhere else, so busy state, notices and the list refresh are not duplicated in Rust. Closing the window still quits (⌘Q or the tray's **Quit**); the item exists while the app runs.
+The menu-bar item: the bundle icon plus a menu that names the selected profile and its state, with **Start**, **Stop**, **Show Runtime Desk** and **Quit**. `tray_sync_cmd` rebuilds it whenever the window's selection or running state changes, and disables Start/Stop when no profile exists; like the app menu, Start/Stop emit a `tray` event and the window runs the same `start_cmd`/`stop_cmd` path it uses everywhere else, so busy state, notices and the list refresh are not duplicated in Rust. Closing the window still quits (⌘Q or the tray's **Quit**); the item exists while the app runs.
 
 ## Frontend
 

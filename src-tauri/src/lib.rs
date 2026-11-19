@@ -149,8 +149,8 @@ async fn recreate_profile_cmd(opts: StartOpts, delete_data: bool) -> R<String> {
 /// The menu-bar item shows the selected profile and its state; the frontend pushes both.
 /// Synchronous so the menu is built on the main thread, which AppKit requires.
 #[tauri::command]
-fn tray_sync_cmd(app: tauri::AppHandle, profile: String, running: bool) -> R<()> {
-    tray::sync(&app, &profile, running)
+fn tray_sync_cmd(app: tauri::AppHandle, profile: String, running: bool, available: bool) -> R<()> {
+    tray::sync(&app, &profile, running, available)
 }
 
 #[tauri::command]

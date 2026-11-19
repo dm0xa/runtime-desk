@@ -52,12 +52,13 @@ pub fn build(app: &AppHandle) -> Result<(), String> {
 
 /// Rebuilds the menu for the selected profile. Called from a synchronous command so the
 /// menu is created on the main thread, which AppKit requires.
-pub fn sync(app: &AppHandle, profile: &str, running: bool) -> Result<(), String> {
+pub fn sync(app: &AppHandle, profile: &str, running: bool, available: bool) -> Result<(), String> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return Ok(()) };
     let state = if running { "running" } else { "stopped" };
     let header = MenuItem::with_id(app, "tray-profile", format!("{profile} · {state}"), false, None::<&str>).map_err(|e| e.to_string())?;
-    let start = MenuItem::with_id(app, "tray-start", "Start", !running, None::<&str>).map_err(|e| e.to_string())?;
-    let stop = MenuItem::with_id(app, "tray-stop", "Stop", running, None::<&str>).map_err(|e| e.to_string())?;
+    // With no profile, Start must not be a button that silently creates "default".
+    let start = MenuItem::with_id(app, "tray-start", "Start", available && !running, None::<&str>).map_err(|e| e.to_string())?;
+    let stop = MenuItem::with_id(app, "tray-stop", "Stop", available && running, None::<&str>).map_err(|e| e.to_string())?;
     let show = MenuItem::with_id(app, "tray-show", "Show Runtime Desk", true, None::<&str>).map_err(|e| e.to_string())?;
     let quit = MenuItem::with_id(app, "tray-quit", "Quit Runtime Desk", true, None::<&str>).map_err(|e| e.to_string())?;
     let menu = Menu::with_items(app, &[
