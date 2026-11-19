@@ -12,8 +12,9 @@ import type {
   NetworkMapEntry,
   Volume,
   VolumeDetail,
+  VolumeSize,
 } from "../types";
-import { fmtBytes, fmtDateTime, fmtSize } from "../lib/format";
+import { fmtBytes, fmtDateTime, fmtSize, parseHumanBytes } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { startStatsStream } from "../lib/stats";
 import { ACTIVITY_SAMPLES, ACTIVITY_STEP_MS, ACTIVITY_WINDOW_S, activitySeriesFor, activitySnapshot, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
@@ -42,6 +43,14 @@ type Props = {
   profile: string;
   /** Bumped by the header's Refresh so the detail and live sample reload. */
   refreshNonce: number;
+  /** The profile's VM memory in bytes: a project's memory is otherwise a number without a ceiling. */
+  vmMemory: number;
+  /** Image id (without `sha256:`) to architecture, from the batched `image inspect` the Images table pays for. */
+  imageArch: Record<string, string>;
+  /** The same batch's repo digest per image id: the name that survives a retag. */
+  imageDigest: Record<string, string>;
+  /** Volume sizes from the shared `system df -v` scan. */
+  volSizes: VolumeSize[];
   onPick: (subject: Subject) => void;
   onNavigate: (subject: Subject) => void;
   onOpenContainers: (search?: string) => void;
@@ -323,11 +332,22 @@ function sumAligned(lists: number[][]): number[] {
   return out;
 }
 
-/** A compose project's member containers with the numbers the shared Activity stream already
- *  samples: the group page adds no `docker stats` child of its own. */
-function GroupPerformance({ members, onNavigate }: { members: Container[]; onNavigate: (subject: Subject) => void }) {
+/** The shared Activity stream, read once per page: every group panel draws the same second. */
+function useActivitySnapshot(): ActivitySnapshot {
   const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
   useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
+  return snap;
+}
+
+/** A compose project's member containers with the numbers the shared Activity stream already
+ *  samples: the group page adds no `docker stats` child of its own. */
+function GroupPerformance({ members, snap, vmMemory, onNavigate }: {
+  members: Container[];
+  snap: ActivitySnapshot;
+  /** VM memory in bytes: a project's memory is only meaningful against its ceiling. */
+  vmMemory: number;
+  onNavigate: (subject: Subject) => void;
+}) {
 
   const statByMember = new Map<string, ContainerStat>();
   for (const s of snap.stats) {
@@ -410,7 +430,10 @@ function GroupPerformance({ members, onNavigate }: { members: Container[]; onNav
                 label={`Memory across ${members.length} containers`}
                 format={(v) => fmtBytes(v)}
               />
-              <span className="inv-metric-sub">stacked per container · scale to window peak</span>
+              <span className="inv-metric-sub">
+                {vmMemory > 0 ? `of ${fmtBytes(vmMemory)} VM (${((mem / vmMemory) * 100).toFixed(1)}%) · ` : ""}
+                stacked per container
+              </span>
             </div>
             <div className="trend-card">
               <div className="trend-head">
@@ -458,7 +481,205 @@ function GroupPerformance({ members, onNavigate }: { members: Container[]; onNav
   );
 }
 
-export function InvestigatorPage({ subject, containers, images, volumes, networks, netMap, daemonUp, profile, refreshNonce, onPick, onNavigate, onOpenContainers, onOpenNetwork, onOpenLogs, onSetMemoryLimit }: Props) {
+/** Service name Compose itself uses: the `com.docker.compose.service` label when the member
+ *  was inspected, otherwise the container name. The label is what a compose file says. */
+const serviceName = (m: Container, d?: ContainerDetail) =>
+  d?.labels.find(([k]) => k === "com.docker.compose.service")?.[1] || m.name;
+
+type MemberFacts = { m: Container; d?: ContainerDetail };
+
+/** What is wrong with this project, per service. Every column answers a question a user asks
+ *  when a stack misbehaves: is it up, does its health check pass, has it been restarted, how
+ *  close is it to its memory ceiling, and how did the last run end. */
+function GroupHealth({ rows, snap, onNavigate }: {
+  rows: MemberFacts[];
+  snap: ActivitySnapshot;
+  onNavigate: (subject: Subject) => void;
+}) {
+  const statOf = (m: Container) =>
+    snap.stats.find((s) => s.id === m.id || s.name === m.name);
+  const unhealthy = rows.filter((r) => r.d?.health === "unhealthy");
+  const noHealth = rows.filter((r) => r.d && !r.d.health_test);
+  const oom = rows.filter((r) => r.d?.oom_killed);
+  const badExit = rows.filter((r) => r.d && r.m.state !== "running" && r.d.exit_code !== 0);
+  const pressured = rows.filter((r) => {
+    const s = statOf(r.m);
+    return !!s && s.mem_limit > 0 && s.mem_pct >= PRESSURE_PCT;
+  });
+  const restarts = rows.reduce((n, r) => n + (r.d?.restart_count ?? 0), 0);
+  const running = rows.filter((r) => r.m.state === "running");
+  /** The longest-running member: uptime, not container age, is what a restart loop resets. */
+  const oldest = running.reduce<{ at: number; name: string } | null>((min, r) => {
+    const at = Date.parse(r.d?.started_at ?? "");
+    if (Number.isNaN(at) || at < 0) return min;
+    return !min || at < min.at ? { at, name: r.m.name } : min;
+  }, null);
+  const uptime = oldest ? dur((Date.now() - oldest.at) / 1000) : null;
+  const flagged = unhealthy.length + oom.length + badExit.length + pressured.length;
+  const reading = snap.at === 0 && !snap.error;
+
+  return (
+    <section className="panel inv-wide">
+      <div className="inv-panel-head">
+        <h3>Health &amp; risk <span className="inv-count">{rows.length}</span></h3>
+        <span className="muted inv-note">
+          {flagged === 0
+            ? `no risk signals · ${restarts} restarts total${uptime ? ` · up ${uptime}` : ""}`
+            : [
+                unhealthy.length ? `${unhealthy.length} unhealthy` : "",
+                oom.length ? `${oom.length} OOM-killed` : "",
+                badExit.length ? `${badExit.length} exited non-zero` : "",
+                pressured.length ? `${pressured.length} near the memory limit` : "",
+                `${restarts} restarts total`,
+                uptime ? `up ${uptime}` : "",
+              ].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      <div className="inv-service-head">
+        <span>State</span><span>Service</span><span>Health</span>
+        <span className="right">Restarts</span><span className="right">Memory</span><span className="right">Last exit</span>
+      </div>
+      {rows.map((r) => {
+        const stat = statOf(r.m);
+        const metered = stat && stat.mem_limit > 0 && stat.mem_pct >= PRESSURE_PCT;
+        const state = r.m.state === "running" ? "running" : r.d && r.d.exit_code !== 0 ? "failed" : "stopped";
+        const health = r.d ? (r.d.health || "no check") : "—";
+        return (
+          <div className="inv-service-row" key={r.m.id}>
+            <span className={`status-badge ${state}`}><span className="dot" />{r.m.state}</span>
+            <button className="inv-link inv-service-name" onClick={() => onNavigate({ kind: "container", id: r.m.id })}>
+              {serviceName(r.m, r.d)}
+            </button>
+            <span className={r.d?.health === "unhealthy" ? "state-bad" : r.d?.health === "healthy" ? "inv-ok" : "muted"}>
+              {health}
+            </span>
+            <span className="inv-member-num">
+              {r.d ? `${r.d.restart_count}${r.d.restart_policy && r.d.restart_count > 0 ? ` · ${r.d.restart_policy}` : ""}` : "—"}
+            </span>
+            <span className={`inv-member-num${metered ? " state-bad" : ""}`}>
+              {stat ? (stat.mem_limit > 0 ? `${stat.mem_pct.toFixed(1)}% of ${fmtBytes(stat.mem_limit)}` : `${fmtBytes(stat.mem)} · no limit`) : "—"}
+            </span>
+            <span className="inv-member-num">
+              {r.m.state === "running"
+                ? <>up{r.d?.oom_killed && <span className="state-bad"> · OOM</span>}</>
+                : r.d
+                  ? <>{r.d.oom_killed ? <span className="state-bad">OOM-killed</span> : <>exit {r.d.exit_code}</>}
+                      {r.d.finished_at && startedOf(r.d.finished_at) !== "—" ? <span className="muted"> · {rel(r.d.finished_at)}</span> : null}</>
+                  : "—"}
+            </span>
+          </div>
+        );
+      })}
+      {reading && <p className="muted">Reading live memory…</p>}
+      {(unhealthy.length > 0 || noHealth.length > 0) && (
+        <p className="muted inv-note">
+          {noHealth.length > 0 && `${noHealth.length} of ${rows.length} without health check`}
+          {noHealth.length > 0 && unhealthy.length > 0 ? " · " : ""}
+          {unhealthy.length > 0 && `${unhealthy.map((r) => serviceName(r.m, r.d)).join(", ")} failing the probe`}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** What this project costs on disk: the images its containers run (including ones that are no
+ *  longer local), the named volumes it mounts, and the total against the VM. */
+function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavigate }: {
+  rows: MemberFacts[];
+  images: Image[];
+  imageArch: Record<string, string>;
+  imageDigest: Record<string, string>;
+  volSizes: VolumeSize[];
+  onNavigate: (subject: Subject) => void;
+}) {
+  const local = new Map(images.map((i) => [`${i.repository}:${i.tag}`, i]));
+  const refs = [...new Set(rows.map((r) => r.m.image))].sort();
+  const services = new Map(refs.map((ref) => [ref, rows.filter((r) => r.m.image === ref).length]));
+  const sizes = new Map(refs.map((ref) => {
+    const img = local.get(ref);
+    return [ref, img ? parseHumanBytes(img.size) : 0];
+  }));
+  const imageBytes = [...sizes.values()].reduce((n, bytes) => n + bytes, 0);
+  const missing = refs.filter((ref) => !local.has(ref));
+
+  // Named volumes come from the inspect payload: the list's `mounts` string cannot tell a
+  // volume from a bind, and a project's storage is the volume part.
+  const volumesUsed = new Map<string, number>();
+  for (const r of rows) {
+    for (const mount of r.d?.mounts ?? []) {
+      if (mount.kind !== "volume" || !mount.source) continue;
+      volumesUsed.set(mount.source, (volumesUsed.get(mount.source) ?? 0) + 1);
+    }
+  }
+  const volSize = new Map(volSizes.map((v) => [v.name, v.size]));
+  const volumeBytes = [...volumesUsed.keys()].reduce((n, name) => n + (volSize.get(name) ?? 0), 0);
+  const bindPaths = rows.flatMap((r) => (r.d?.mounts ?? []).filter((mount) => mount.kind === "bind" && mount.source));
+
+  return (
+    <section className="panel inv-wide">
+      <div className="inv-panel-head">
+        <h3>Footprint</h3>
+        <span className="muted inv-note">
+          {`${fmtSize(imageBytes)} images · ${fmtSize(volumeBytes)} volumes · ${fmtSize(imageBytes + volumeBytes)} total`}
+          {missing.length ? ` · ${missing.length} image${missing.length === 1 ? "" : "s"} not pulled` : ""}
+        </span>
+      </div>
+      <div className="inv-group">
+        <div className="inv-group-title">Images<span className="inv-count">{refs.length}</span></div>
+        {refs.map((ref) => {
+          const img = local.get(ref);
+          const key = img ? img.id.replace(/^sha256:/, "") : "";
+          const arch = img ? imageArch[key] : undefined;
+          const digest = img ? imageDigest[key] : undefined;
+          const body = (
+            <>
+              <code>{ref}</code>
+              <span className="muted">
+                {img ? fmtSize(sizes.get(ref) ?? 0) : <span className="state-bad">not pulled</span>}
+                {arch ? ` · ${arch}` : ""}
+                {` · ${services.get(ref)} service${services.get(ref) === 1 ? "" : "s"}`}
+              </span>
+            </>
+          );
+          return (
+            <div className="inv-image-row" key={ref}>
+              {img
+                ? <button className="inv-link inv-mount" onClick={() => onNavigate({ kind: "image", id: img.id })}>{body}</button>
+                : <div className="inv-row inv-mount">{body}</div>}
+              {digest && <code className="inv-digest" title={digest}>{digest}</code>}
+            </div>
+          );
+        })}
+      </div>
+      <div className="inv-group">
+        <div className="inv-group-title">Volumes<span className="inv-count">{volumesUsed.size}</span></div>
+        {volumesUsed.size === 0 ? <span className="muted">no named volumes</span> : [...volumesUsed.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, count]) => (
+            <div className="inv-row inv-mount" key={name}>
+              <button className="inv-link" onClick={() => onNavigate({ kind: "volume", id: name })}><code>{name}</code></button>
+              <span className="muted">
+                {volSize.has(name) ? fmtSize(volSize.get(name) ?? 0) : volSizes.length ? "size unknown" : "size not scanned"}
+                {` · ${count} service${count === 1 ? "" : "s"}`}
+                {count > 1 ? " · shared" : ""}
+              </span>
+            </div>
+          ))}
+      </div>
+      <div className="inv-group">
+        <div className="inv-group-title">Bind mounts<span className="inv-count">{bindPaths.length}</span></div>
+        {bindPaths.length === 0 ? <span className="muted">none</span> : bindPaths.map((mount) => (
+          <div className="inv-row inv-mount" key={`${mount.source}-${mount.destination}`}>
+            <code>{pathWithBreaks(mount.source)}</code>
+            <span className="muted">→ {mount.destination} · {mount.mode || "rw"}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function InvestigatorPage({ subject, containers, images, volumes, networks, netMap, daemonUp, profile, refreshNonce, vmMemory, imageArch, imageDigest, volSizes, onPick, onNavigate, onOpenContainers, onOpenNetwork, onOpenLogs, onSetMemoryLimit }: Props) {
   const [detail, setDetail] = useState<{ kind: Subject["kind"]; data: ContainerDetail | ImageDetail | VolumeDetail | NetworkDetail } | null>(null);
   const [inspect, setInspect] = useState<InspectTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -480,6 +701,10 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
    *  merges them into the container's `Config.Labels`, so this is the only way to say which
    *  label came from the image and which was attached when the container was created. */
   const [imageLabels, setImageLabels] = useState<[string, string][] | null>();
+  /** A project's members are only listed by the containers table; health, restarts, limits and
+   *  mounts live in `inspect`, so the group page reads them in one batched call. */
+  const [memberDetails, setMemberDetails] = useState<Record<string, ContainerDetail>>({});
+  const snap = useActivitySnapshot();
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
   const running = container?.state === "running";
@@ -531,6 +756,33 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       .catch(() => { if (alive) setImageLabels(null); });
     return () => { alive = false; };
   }, [subject?.kind, subject?.id, subject?.runtime, container?.image, refreshNonce]);
+
+  // One `docker inspect` covers the whole project. Keyed by name because inspect truncates the
+  // id to twelve characters, which does not always match the id the containers list carries.
+  const memberIds = subject?.kind === "group"
+    ? containers.filter((c) => c.compose_project === subject.id).map((c) => c.id).sort().join(",")
+    : "";
+  useEffect(() => {
+    if (!memberIds) {
+      setMemberDetails({});
+      return;
+    }
+    let alive = true;
+    const ids = memberIds.split(",");
+    const keep = (list: ContainerDetail[]) => {
+      if (!alive) return;
+      const next: Record<string, ContainerDetail> = {};
+      for (const d of list) next[d.name] = d;
+      setMemberDetails(next);
+    };
+    // One vanished container makes `docker inspect a b c` exit non-zero and print a partial
+    // array, so a failed batch falls back to per-member reads instead of blanking the page.
+    invoke<ContainerDetail[]>("container_details_cmd", { ids })
+      .then((list) => keep(list ?? []))
+      .catch(() => Promise.allSettled(ids.map((id) => invoke<ContainerDetail>("container_detail_cmd", { id })))
+        .then((settled) => keep(settled.flatMap((r) => (r.status === "fulfilled" && r.value ? [r.value] : [])))));
+    return () => { alive = false; };
+  }, [memberIds, refreshNonce]);
 
   // Live numbers only exist for a running container. One streaming child feeds this panel
   // about once a second; if it cannot start or dies, the old five-second poll takes over.
@@ -655,6 +907,35 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
    *  members are the containers the list already carries, so no new Rust surface exists. */
   const groupMembers = subject.kind === "group" ? containers.filter((c) => c.compose_project === subject.id) : [];
   const groupOldest = groupMembers.reduce<string>((min, c) => (!min || c.created_at < min ? c.created_at : min), "");
+  const groupRows: MemberFacts[] = groupMembers.map((m) => ({ m, d: memberDetails[m.name] }));
+  /** Compose records where the project came from on every container it creates, so one member's
+   *  labels name the file and directory to edit. */
+  const groupConfig = groupRows.map((r) => r.d).find(Boolean);
+  const configFile = groupConfig?.labels.find(([k]) => k === "com.docker.compose.project.config_files")?.[1] ?? "";
+  const workingDir = groupConfig?.labels.find(([k]) => k === "com.docker.compose.project.working_dir")?.[1] ?? "";
+  /** Longest-running member: uptime says whether a restart loop keeps resetting the service. */
+  const groupUptime = groupRows.reduce<{ at: number } | null>((min, r) => {
+    if (r.m.state !== "running") return min;
+    const at = Date.parse(r.d?.started_at ?? "");
+    if (Number.isNaN(at) || at < 0) return min;
+    return !min || at < min.at ? { at } : min;
+  }, null);
+  /** Networks this project is attached to, and how many of its members are on each. */
+  const groupNetworks = netMap
+    .map((n) => ({ name: n.name, count: n.containers.filter((c) => groupMembers.some((m) => m.name === c.name)).length }))
+    .filter((n) => n.count > 0)
+    .sort((a, b) => b.count - a.count);
+  /** Host ports this project publishes, and the containers outside it that claim the same one:
+   *  a stopped sibling project's mapping is exactly why the next `compose up` fails. */
+  const groupPorts = groupMembers.flatMap((m) => m.ports.split(",").map((p) => p.trim()).filter(Boolean));
+  const groupPortConflicts = groupPorts.flatMap((claim) => {
+    const host = /(?:^|:)(\d+)->\d+\/(?:tcp|udp)/i.exec(claim)?.[1];
+    if (!host) return [];
+    return containers
+      .filter((c) => !groupMembers.some((m) => m.id === c.id))
+      .filter((c) => c.ports.split(",").some((p) => new RegExp(`(?:^|:)${host}->\\d+/(?:tcp|udp)`, "i").test(p.trim())))
+      .map((c) => ({ host, name: c.name, project: c.compose_project, state: c.state }));
+  });
   const title = subject.kind === "group"
     ? subject.id
     : subject.kind === "container"
@@ -783,7 +1064,13 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
 
       {error && <div className="panel"><p className="muted">{error}</p></div>}
 
-      {subject.kind === "group" && <GroupPerformance members={groupMembers} onNavigate={onNavigate} />}
+      {subject.kind === "group" && (
+        <>
+          <GroupPerformance members={groupMembers} snap={snap} vmMemory={vmMemory} onNavigate={onNavigate} />
+          <GroupHealth rows={groupRows} snap={snap} onNavigate={onNavigate} />
+          <GroupFootprint rows={groupRows} images={images} imageArch={imageArch} imageDigest={imageDigest} volSizes={volSizes} onNavigate={onNavigate} />
+        </>
+      )}
 
       {container && running && (
         <section className="panel" aria-busy={!stats && !statsError}>
@@ -864,7 +1151,10 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
               <Row label="Containers">{groupMembers.length}</Row>
               <Row label="Running">{groupMembers.filter((c) => c.state === "running").length}</Row>
               <Row label="Images">{new Set(groupMembers.map((c) => c.image)).size}</Row>
+              <Row label="Uptime">{groupUptime ? <>{dur((Date.now() - groupUptime.at) / 1000)}<span className="muted"> · longest-running member</span></> : "—"}</Row>
               <Row label="Oldest">{groupOldest ? <>{fmtDateTime(groupOldest)}<span className="muted"> · {rel(groupOldest)}</span></> : "—"}</Row>
+              <Row label="Compose file" mono copy={configFile}><code title={configFile}>{configFile || "—"}</code></Row>
+              <Row label="Working dir" mono copy={workingDir}><code title={workingDir}>{workingDir || "—"}</code></Row>
             </FactsGroup>
           )}
           {container && (
@@ -989,6 +1279,33 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
                 </div>
               )) : <span className="muted">none</span>}
             </div>
+          )}
+
+          {subject.kind === "group" && (
+            <>
+              <div className="inv-group">
+                <div className="inv-group-title">Networks</div>
+                {groupNetworks.length === 0 ? <span className="muted">none</span> : groupNetworks.map((n) => (
+                  <div className="inv-row" key={n.name}>
+                    <button className="inv-link" onClick={() => onNavigate({ kind: "network", id: n.name })}>{n.name}</button>
+                    <span className="muted">{n.count} of {groupMembers.length} attached</span>
+                  </div>
+                ))}
+              </div>
+              <div className="inv-group">
+                <div className="inv-group-title">Port collisions</div>
+                {groupPortConflicts.length === 0 ? (
+                  <span className="muted">no other container claims these host ports</span>
+                ) : groupPortConflicts.map((c) => (
+                  <div className="inv-row" key={`${c.host}-${c.name}`}>
+                    <code>{c.host}</code>
+                    <span className="muted">
+                      also declared by <span className="state-bad">{c.project || "no project"}/{c.name}</span> ({c.state})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {container && (

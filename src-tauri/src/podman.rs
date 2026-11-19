@@ -856,6 +856,7 @@ fn parse_detail(c: &serde_json::Value) -> ContainerDetail {
         memory_limit: c["HostConfig"]["Memory"].as_u64().unwrap_or(0),
         nano_cpus: c["HostConfig"]["NanoCpus"].as_i64().unwrap_or(0),
         pid: c["State"]["Pid"].as_i64().unwrap_or(0),
+        exit_code: c["State"]["ExitCode"].as_i64().unwrap_or(0),
         oom_killed: c["State"]["OOMKilled"].as_bool().unwrap_or(false),
     }
 }

@@ -358,6 +358,8 @@ function App() {
   const [images, setImages] = useState<Image[]>([]);
   /** Image id (short or full digest) → architecture, from one batched `image inspect`. */
   const [imageArch, setImageArch] = useState<Record<string, string>>({});
+  /** Same batched `image inspect`, kept apart: the digest names the bits, the arch names the CPU. */
+  const [imageDigest, setImageDigest] = useState<Record<string, string>>({});
   /** The id set the last inspect answered for; a refresh with the same images does not re-run it. */
   const imageIdsRef = useRef("");
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -1039,19 +1041,24 @@ function App() {
     if (ids.length === 0) {
       imageIdsRef.current = "";
       setImageArch({});
+      setImageDigest({});
       return;
     }
     try {
       const platforms = await invoke<ImagePlatform[]>("image_platforms_cmd", { ids });
       if (gen !== refreshGen.current) return;
       const map: Record<string, string> = {};
+      const digests: Record<string, string> = {};
       for (const p of platforms) {
         const full = p.id.replace(/^sha256:/, "");
         map[full] = p.architecture;
         map[full.slice(0, 12)] = p.architecture;
+        digests[full] = p.digest;
+        digests[full.slice(0, 12)] = p.digest;
       }
       imageIdsRef.current = key;
       setImageArch(map);
+      setImageDigest(digests);
     } catch {
       // Retry on the next wave: the ids are still unanswered, so the key was never stored.
     }
@@ -1812,10 +1819,12 @@ function App() {
     }).catch(() => {});
   }, [selected, selectedRunning, profiles.length]);
   const diskLimitBytes = profiles.find((p) => p.name === selected)?.disk ?? 0;
-  // Volume sizes need one `system df -v` scan; only pay for it while the list is open.
+  // Volume sizes need one `system df -v` scan; only pay for it while the list is open, or on
+  // Sherlock's project page where a project's footprint is the point.
+  const wantVolSizes = tab === "volumes" || (tab === "sherlock" && subject?.kind === "group");
   const volSizesProfile = useRef<string | null>(null);
   useEffect(() => {
-    if (tab !== "volumes" || !selectedRunning) {
+    if (!wantVolSizes || !selectedRunning) {
       setVolSizes([]);
       setVolSizesLoading(false);
       volSizesProfile.current = null;
@@ -1832,7 +1841,7 @@ function App() {
       setVolSizesLoading(false);
     });
     return () => { alive = false; };
-  }, [tab, lastUpdated, selected, selectedRunning]);
+  }, [wantVolSizes, lastUpdated, selected, selectedRunning]);
   // The storage report costs ~4 s (`system df -v` plus a guest `du`), so the last answer is
   // kept per profile and reused for a minute. Coming back to the page paints it at once and,
   // once it is stale, refreshes it in the background; a mutation or Rescan bypasses the cache.
@@ -2289,6 +2298,10 @@ function App() {
               daemonUp={selectedRunning}
               profile={selected}
               refreshNonce={subjectNonce}
+              vmMemory={profiles.find((p) => p.name === selected)?.memory ?? 0}
+              imageArch={imageArch}
+              imageDigest={imageDigest}
+              volSizes={volSizes}
               onPick={openSubject}
               onNavigate={navigateSubject}
               onOpenContainers={(search) => {

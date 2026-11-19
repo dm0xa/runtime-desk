@@ -3,7 +3,7 @@
 ## Overview
 
 - **Frontend**: React 19 + TypeScript, built with Vite.
-- **Backend**: Rust, exposed to the frontend as 99 Tauri commands.
+- **Backend**: Rust, exposed to the frontend as 100 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
 A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 10 seconds, `colima status` per profile 5 minutes (cleared by any profile mutation), disk totals and per-volume sizes 60.
@@ -21,11 +21,11 @@ Assembly point; `main.rs` only calls `run()`.
 - `StatsStream` is the same shape for Sherlock's `docker stats <id>`: one JSON sample per second, then `__stats_end__` when stdout closes, so the panel falls back to polling instead of freezing on the last number.
 - `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, builds the menu-bar item from `tray::build` (its Start/Stop forward a `tray` event to the window, which owns the action), manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
 
-Command groups (99 total):
+Command groups (100 total):
 
 - **Profiles and Colima VM** (19): `list_profiles_cmd`, `status_cmd`, `start_cmd`, `stop_cmd`, `restart_cmd`, `delete_cmd`, `recreate_profile_cmd`, `set_profile_cmd`, `profile_config_cmd`, `version_cmd`, `template_cmd`, `ssh_config_cmd`, `prune_cmd`, `update_cmd`, `nerdctl_install_cmd`, `vm_diagnostics_cmd`, `version_check_cmd`, `upgrade_cmd`, `app_release_cmd`
 - **AI** (8): `model_run_cmd`, `model_list_cmd`, `model_pull_cmd`, `model_setup_cmd`, `model_chat_cmd`, `model_serve_start_cmd`, `model_serve_stop_cmd`, `model_serve_status_cmd`
-- **Containers** (8): `list_containers_cmd`, `container_action_cmd`, `container_detail_cmd`, `container_logs_cmd`, `container_stats_cmd`, `container_stats_one_cmd`, `container_update_memory_cmd`, `inspect_cmd`
+- **Containers** (9): `list_containers_cmd`, `container_action_cmd`, `container_detail_cmd`, `container_details_cmd` (one `docker inspect` for a whole Compose project), `container_logs_cmd`, `container_stats_cmd`, `container_stats_one_cmd`, `container_update_memory_cmd`, `inspect_cmd`
 - **Images** (5): `list_images_cmd`, `image_platforms_cmd`, `image_detail_cmd`, `image_pull_cmd`, `image_remove_cmd`
 - **Volumes** (5): `list_volumes_cmd`, `volume_detail_cmd`, `volume_sizes_cmd`, `volume_contents_cmd`, `volume_remove_cmd`
 - **Networks** (4): `list_networks_cmd`, `network_map_cmd`, `network_detail_cmd`, `network_remove_cmd`

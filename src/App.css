@@ -1098,6 +1098,18 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .inv-member-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
 .inv-member-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
 .inv-port-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+/* Compose group page: the health table. Columns are fixed so restarts, memory ceiling and the
+   last exit line up down the stack; the service name takes the slack. */
+.inv-service-head { display: grid; grid-template-columns: 84px minmax(0, 1fr) 92px 96px 156px 124px; gap: 12px; padding: 2px 0 6px; box-shadow: inset 0 -1px 0 var(--sep); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.inv-service-head .right { text-align: right; }
+.inv-service-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 92px 96px 156px 124px; gap: 12px; align-items: center; padding: 5px 0; box-shadow: inset 0 -1px 0 var(--sep); font-size: 12.5px; }
+.inv-service-row:last-of-type { box-shadow: none; }
+.inv-service-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.inv-service-row .inv-member-num { display: flex; gap: 4px; justify-content: flex-end; }
+.inv-service-row .state-bad, .inv-group .state-bad { color: var(--red-text); }
+/* Footprint: one image per block, because a repo digest is wider than the link beside it. */
+.inv-image-row { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.inv-digest { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1100px) {
   .investigator-grid { grid-template-columns: 1fr; }
   .investigator { padding-left: 16px; padding-right: 16px; }

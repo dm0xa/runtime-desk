@@ -36,7 +36,7 @@ export type Container = {
 
 export type Image = { id: string; repository: string; tag: string; size: string; created: string };
 /** One image's platform from a batched `image inspect`; the id is the full `sha256:` digest. */
-export type ImagePlatform = { id: string; architecture: string };
+export type ImagePlatform = { id: string; architecture: string; digest: string };
 export type Volume = { name: string; driver: string; mountpoint: string };
 export type Network = { name: string; driver: string; scope: string };
 export type SystemStatus = {
@@ -179,6 +179,8 @@ export type ContainerDetail = {
   memory_limit: number;
   nano_cpus: number;
   pid: number;
+  /** Exit status of the last run; 0 while the container is up. */
+  exit_code: number;
   oom_killed: boolean;
 };
 export type NetworkContainer = { name: string; ip: string; mac: string };

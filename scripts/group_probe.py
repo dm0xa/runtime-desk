@@ -95,6 +95,11 @@ IMAGE_BYTES = {"sha256:" + "11" * 32: 100_000_000, "sha256:" + "22" * 32: 512_00
                "sha256:" + "33" * 32: 250_000_000, "sha256:" + "44" * 32: 50_000_000}
 IMAGE_ARCH = {"sha256:" + "11" * 32: "arm64", "sha256:" + "22" * 32: "arm64",
               "sha256:" + "33" * 32: "arm64", "sha256:" + "44" * 32: "arm64"}
+# Repo digests, as `docker image inspect` reports them: the name that survives a retag.
+IMAGE_DIGEST = {"sha256:" + "11" * 32: "sha256:" + "a1" * 32,
+                "sha256:" + "22" * 32: "sha256:" + "b2" * 32,
+                "sha256:" + "33" * 32: "sha256:" + "c3" * 32,
+                "sha256:" + "44" * 32: "sha256:" + "d4" * 32}
 
 VOLUMES = [
     {"name": "pgdata", "driver": "local", "mountpoint": "/var/lib/docker/volumes/pgdata/_data"},
@@ -120,22 +125,32 @@ def _net(name, ip):
 
 
 def _detail(cid, name, image, state, health, restarts, policy, mem_limit, started_ms,
-            finished_ms=None, mounts=None, networks=None, ports=None, oom=False, pid=1000):
+            finished_ms=None, mounts=None, networks=None, ports=None, oom=False, pid=1000,
+            exit_code=0):
     return {
         "id": cid, "name": name, "image": image, "image_id": "sha256:" + "22" * 32,
         "command": "", "created": iso(NOW_MS - 7 * 86400_000),
         "started_at": iso(started_ms), "finished_at": iso(finished_ms) if finished_ms else "0001-01-01T00:00:00Z",
         "state": state, "health": health, "restart_policy": policy, "restart_count": restarts,
+        "labels": compose_labels(name.split("-")[1] if "-" in name else name),
         "restart_max": 0, "mounts": mounts or [], "networks": networks or [],
-        "env_count": 0, "env": [], "labels": [], "ports": ports or [], "hostname": name,
+        "env_count": 0, "env": [], "ports": ports or [], "hostname": name,
         "workdir": "", "user": "", "entrypoint": "", "cmd": "",
         "health_test": "CMD-SHELL curl -fsS localhost:80/ || exit 1" if health else "",
         "health_interval": 30_000_000_000 if health else 0, "health_timeout": 5_000_000_000 if health else 0,
         "health_retries": 3 if health else 0,
         "health_log": [{"start": iso(NOW_MS - 60_000), "exit_code": 0 if health == "healthy" else 1,
                         "output": ""}] if health else [],
-        "memory_limit": mem_limit, "nano_cpus": 0, "pid": pid, "oom_killed": oom,
+        "memory_limit": mem_limit, "nano_cpus": 0, "pid": pid, "exit_code": exit_code,
+        "oom_killed": oom,
     }
+
+
+def compose_labels(service: str) -> list:
+    return [["com.docker.compose.project", PROJECT],
+            ["com.docker.compose.service", service],
+            ["com.docker.compose.project.config_files", CONFIG],
+            ["com.docker.compose.project.working_dir", WORKDIR]]
 
 
 WEB_PORT = [{"container": "80", "proto": "tcp", "host_ip": "0.0.0.0", "host_port": "8080"}]
@@ -164,7 +179,7 @@ DETAILS = {
     "c-backup": _detail("c-backup", "shopstack-backup-1", ALPINE, "exited", "", 0, "no", 0,
                         NOW_MS - 2 * 3600_000 - 60_000, finished_ms=NOW_MS - 2 * 3600_000,
                         mounts=[{"source": "pgdata", "destination": "/backup", "mode": "rw", "kind": "volume"}],
-                        networks=[_net("shopstack_default", "172.18.0.16")], pid=5),
+                        networks=[_net("shopstack_default", "172.18.0.16")], pid=5, exit_code=3),
 }
 
 # One second of the shared Activity stream: 5 running members, api at 97.7% of its limit.
@@ -187,6 +202,7 @@ DATA = {
     "containers": CONTAINERS, "images": IMAGES, "volumes": VOLUMES, "volumeSizes": VOLUME_SIZES,
     "netMap": NET_MAP, "compose": COMPOSE, "details": DETAILS, "stats": STATS, "status": STATUS,
     "tools": TOOLS, "profiles": PROFILES, "imageBytes": IMAGE_BYTES, "imageArch": IMAGE_ARCH,
+    "imageDigest": IMAGE_DIGEST,
     "now": NOW_MS,
 }
 
@@ -205,7 +221,8 @@ window.__TAURI_INTERNALS__ = {
       case "system_status_cmd": return DATA.tools;
       case "list_containers_cmd": return DATA.containers;
       case "list_images_cmd": return DATA.images;
-      case "image_platforms_cmd": return DATA.images.map((i) => ({ id: i.id, architecture: DATA.imageArch[i.id] }));
+      case "image_platforms_cmd": return DATA.images.map((i) => ({ id: i.id, architecture: DATA.imageArch[i.id],
+        digest: DATA.imageDigest[i.id] }));
       case "list_volumes_cmd": return DATA.volumes;
       case "list_networks_cmd": return DATA.netMap.map((n) => ({ name: n.name, driver: n.driver, scope: n.scope }));
       case "network_map_cmd": return DATA.netMap;
@@ -215,6 +232,8 @@ window.__TAURI_INTERNALS__ = {
       case "podman_disk_usage_cmd": return { images: 0, containers: 0, volumes: 0, reclaimable: 0 };
       case "cleanup_report_cmd": return { containers: [], images: [], volumes: [], build_cache: [], log_files: [], host_disk: 500000000000, root_total: 60000000000, root_used: 20000000000, totals: { images: 912000000, containers: 4000000, volumes: 352000000, build_cache: 250000000 } };
       case "container_detail_cmd": return DATA.details[id] || null;
+      // Same fixture, batched: the project page reads every member in one call.
+      case "container_details_cmd": return (args && args.ids ? args.ids : []).map((i) => DATA.details[i]).filter(Boolean);
       case "image_detail_cmd": {
         const img = DATA.images.find((i) => i.id === id || `${i.repository}:${i.tag}` === id);
         if (!img) throw new Error("No such image: " + id);

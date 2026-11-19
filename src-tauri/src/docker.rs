@@ -389,6 +389,9 @@ pub fn list_images() -> Result<Vec<Image>, String> {
 pub struct ImagePlatform {
     pub id: String,
     pub architecture: String,
+    /// Repo digest without the `repo@` prefix. Two tags that point at the same bits share it,
+    /// and it is the only name that survives a retag. Falls back to the image id.
+    pub digest: String,
 }
 
 /// An image id reaches `image inspect` as argv. The ids come from our own list, but the
@@ -408,9 +411,15 @@ fn parse_platforms(raw: &str) -> Vec<ImagePlatform> {
         .filter_map(|img| {
             let id = img["Id"].as_str().filter(|s| !s.is_empty())?;
             let architecture = img["Architecture"].as_str().unwrap_or_default();
+            let digest = img["RepoDigests"]
+                .as_array()
+                .and_then(|a| a.iter().find_map(|d| d.as_str()))
+                .map(|d| d.rsplit_once('@').map(|(_, hash)| hash.to_string()).unwrap_or_else(|| d.to_string()))
+                .unwrap_or_else(|| id.to_string());
             (!architecture.is_empty()).then(|| ImagePlatform {
                 id: id.to_string(),
                 architecture: architecture.to_string(),
+                digest,
             })
         })
         .collect()
@@ -957,16 +966,51 @@ mod tests {
     #[test]
     fn image_platforms_parse_the_inspect_array() {
         let raw = r#"[
-            {"Id":"sha256:aaaaaaaaaaaaaaaa","Architecture":"amd64","Os":"linux"},
-            {"Id":"sha256:bbbbbbbbbbbbbbbb","Architecture":"arm64"},
+            {"Id":"sha256:aaaaaaaaaaaaaaaa","Architecture":"amd64","Os":"linux",
+             "RepoDigests":["nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]},
+            {"Id":"sha256:bbbbbbbbbbbbbbbb","Architecture":"arm64","RepoDigests":[]},
             {"Id":"sha256:cccccccccccccccc"}
         ]"#;
         let parsed = super::parse_platforms(raw);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].id, "sha256:aaaaaaaaaaaaaaaa");
         assert_eq!(parsed[0].architecture, "amd64");
+        assert_eq!(parsed[0].digest, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
         assert_eq!(parsed[1].architecture, "arm64");
+        // An image that was never pushed has no repo digest; the id is the only stable name.
+        assert_eq!(parsed[1].digest, "sha256:bbbbbbbbbbbbbbbb");
         assert!(super::parse_platforms("not json").is_empty());
+    }
+
+    /// The project page's health table reads these three fields straight off inspect: the exit
+    /// status of the last run, whether the kernel killed it, and the service name Compose
+    /// stamped. A missing mapping shows up as a row that says "up" for a dead container.
+    #[test]
+    fn container_detail_maps_exit_oom_and_compose_labels() {
+        let raw = serde_json::json!({
+            "Id": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "Name": "/shopstack-api-1",
+            "Created": "2026-11-18T20:00:00Z",
+            "State": {"Status": "exited", "ExitCode": 137, "OOMKilled": true, "Pid": 0,
+                      "StartedAt": "2026-11-18T20:00:00Z", "FinishedAt": "2026-11-18T20:05:00Z"},
+            "RestartCount": 14,
+            "HostConfig": {"RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 0},
+                           "Memory": 536870912, "NanoCpus": 0},
+            "Config": {"Image": "ghcr.io/acme/api:2.4.1",
+                       "Labels": {"com.docker.compose.service": "api",
+                                  "com.docker.compose.project.config_files": "/srv/shopstack/compose.yaml"},
+                       "Healthcheck": {"Test": ["CMD-SHELL", "curl -f localhost || exit 1"]}},
+        });
+        let d = super::parse_container_detail(&raw);
+        assert_eq!(d.exit_code, 137);
+        assert!(d.oom_killed);
+        assert_eq!(d.restart_count, 14);
+        assert_eq!(d.restart_policy, "on-failure");
+        assert_eq!(d.name, "shopstack-api-1");
+        assert_eq!(
+            d.labels.iter().find(|(k, _)| k == "com.docker.compose.service").map(|(_, v)| v.as_str()),
+            Some("api")
+        );
     }
 
     /// These strings become argv; a flag or a name must never reach the CLI.
@@ -1130,6 +1174,8 @@ pub struct ContainerDetail {
     pub memory_limit: u64,
     pub nano_cpus: i64,
     pub pid: i64,
+    /// Exit status of the last run; 0 for a container that is still up.
+    pub exit_code: i64,
     /// True when the last exit was an OOM kill, which is how a container shows up
     /// after Docker's kernel victim rather than a clean stop.
     pub oom_killed: bool,
@@ -1140,6 +1186,35 @@ pub fn container_detail(id: &str) -> Result<ContainerDetail, String> {
     let parsed: Vec<serde_json::Value> =
         serde_json::from_str(&raw).map_err(|e| format!("parse inspect: {e}"))?;
     let c = parsed.first().ok_or("container not found")?;
+    Ok(parse_container_detail(c))
+}
+
+/// Many containers from one `docker inspect`. The project page reads health, restarts and
+/// limits for every member, and one CLI spawn per member is one latency per member.
+pub fn container_details(ids: &[String]) -> Result<Vec<ContainerDetail>, String> {
+    let valid: Vec<&str> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| {
+            !id.is_empty()
+                && !id.starts_with('-')
+                && id
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'.' | b'_' | b'-'))
+        })
+        .collect();
+    if valid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec!["inspect"];
+    args.extend(valid);
+    let raw = run_docker(&args)?;
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).map_err(|e| format!("parse inspect: {e}"))?;
+    Ok(parsed.iter().map(parse_container_detail).collect())
+}
+
+fn parse_container_detail(c: &serde_json::Value) -> ContainerDetail {
     let text = |v: &str| c[v].as_str().unwrap_or_default().to_string();
 
     let arg_list = |path: &[&str]| -> Vec<String> {
@@ -1268,7 +1343,7 @@ pub fn container_detail(id: &str) -> Result<ContainerDetail, String> {
     let entrypoint = arg_list(&["Config", "Entrypoint"]).join(" ");
     let cmd = arg_list(&["Config", "Cmd"]).join(" ");
 
-    Ok(ContainerDetail {
+    ContainerDetail {
         id: text("Id").chars().take(12).collect(),
         name: text("Name").trim_start_matches('/').to_string(),
         image: c["Config"]["Image"].as_str().unwrap_or_default().to_string(),
@@ -1301,8 +1376,9 @@ pub fn container_detail(id: &str) -> Result<ContainerDetail, String> {
         memory_limit: c["HostConfig"]["Memory"].as_u64().unwrap_or(0),
         nano_cpus: c["HostConfig"]["NanoCpus"].as_i64().unwrap_or(0),
         pid: c["State"]["Pid"].as_i64().unwrap_or(0),
+        exit_code: c["State"]["ExitCode"].as_i64().unwrap_or(0),
         oom_killed: c["State"]["OOMKilled"].as_bool().unwrap_or(false),
-    })
+    }
 }
 
 #[derive(Serialize, Clone)]
