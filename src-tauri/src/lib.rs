@@ -6,6 +6,7 @@ mod tools;
 mod docker;
 mod menu;
 mod podman;
+mod tray;
 
 use colima::{Profile, ProfileConfig, StartOpts, Status};
 use std::collections::HashMap;
@@ -137,6 +138,19 @@ async fn restart_cmd(profile: String) -> R<String> { blocking(move || colima::re
 #[tauri::command]
 async fn delete_cmd(profile: String, data: bool, force: bool) -> R<String> {
     blocking(move || colima::delete(&profile, data, force)).await
+}
+
+/// One transition for the fields Colima only reads at creation: stop, delete, start.
+#[tauri::command]
+async fn recreate_profile_cmd(opts: StartOpts, delete_data: bool) -> R<String> {
+    blocking(move || colima::recreate(&opts, delete_data)).await
+}
+
+/// The menu-bar item shows the selected profile and its state; the frontend pushes both.
+/// Synchronous so the menu is built on the main thread, which AppKit requires.
+#[tauri::command]
+fn tray_sync_cmd(app: tauri::AppHandle, profile: String, running: bool) -> R<()> {
+    tray::sync(&app, &profile, running)
 }
 
 #[tauri::command]
@@ -897,13 +911,18 @@ pub fn run() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::dispatch(app, event.id().as_ref()))
         .setup(|app| {
+            // A menu-bar item is a convenience; a failure must not keep the window from opening.
+            if let Err(err) = tray::build(app.handle()) {
+                eprintln!("menu-bar item unavailable: {err}");
+            }
             // Warm the first read the window makes, while it is still loading the bundle.
             std::thread::spawn(colima::prefetch_profiles);
             restore_main_window(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_profiles_cmd, status_cmd, start_cmd, stop_cmd, restart_cmd, delete_cmd,
+            list_profiles_cmd, status_cmd, start_cmd, stop_cmd, restart_cmd, delete_cmd, recreate_profile_cmd,
+            tray_sync_cmd,
             podman_machines_cmd, podman_machine_init_cmd, podman_set_machine_cmd, podman_machine_set_cmd, podman_containers_cmd, podman_images_cmd, podman_image_pull_cmd, podman_volumes_cmd, podman_disk_usage_cmd, podman_image_remove_cmd, image_remove_cmd, podman_volume_remove_cmd, podman_network_remove_cmd, podman_container_start_cmd, podman_container_stop_cmd, podman_container_restart_cmd, podman_container_remove_cmd, podman_container_logs_cmd, podman_image_inspect_cmd, podman_container_inspect_json_cmd, podman_container_detail_cmd, podman_container_stats_cmd, podman_image_detail_cmd, podman_volume_detail_cmd, podman_network_detail_cmd, podman_volume_inspect_cmd, podman_network_inspect_cmd, podman_networks_cmd, podman_network_map_cmd, podman_start_cmd, podman_stop_cmd, podman_restart_cmd, podman_remove_cmd,
             version_cmd, template_cmd, ssh_config_cmd,
             model_run_cmd, prune_cmd, update_cmd, nerdctl_install_cmd,

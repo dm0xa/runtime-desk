@@ -3,7 +3,7 @@
 ## Overview
 
 - **Frontend**: React 19 + TypeScript, built with Vite.
-- **Backend**: Rust, exposed to the frontend as 97 Tauri commands.
+- **Backend**: Rust, exposed to the frontend as 99 Tauri commands.
 - **Data source**: the `colima`, `docker`, `podman` and `kubectl` CLIs already on the machine; `limactl`, `nerdctl`, `ramalama`, `krunkit`, `osascript` and `open` only where needed.
 
 A webview invokes Rust commands, which shell out on a blocking thread. No daemon, no HTTP server, no database: CLI output is read on demand and held in React state. Durable state is small — preferences, dashboard layout and tags in `localStorage`, model-server PIDs in `<colima home>/runtime-desk-serve.json` so a relaunch can stop a server it started, and the window frame in `window.json` in the app config dir. Arguments go as arrays, never shell strings, and nothing survives a restart: every launch probes afresh. In-memory only: profiles 10 seconds, `colima status` per profile 5 minutes (cleared by any profile mutation), disk totals and per-volume sizes 60.
@@ -19,11 +19,11 @@ Assembly point; `main.rs` only calls `run()`.
 - `ServeState` (`Mutex<HashMap<profile, pid>>`) tracks AI model servers, mirrored to `<colima home>/runtime-desk-serve.json` on every change because a server outlives the window; entries whose PID `kill -0` rejects are dropped on load, so a crashed run cannot offer a "running" server that Stop then fails to kill.
 - `EventStream` is a `Mutex<Option<Child>>` for the live `docker events` child: starting a stream kills the previous one, so a profile switch cannot leave a reader on the old daemon; its thread ends at stdout EOF.
 - `StatsStream` is the same shape for Sherlock's `docker stats <id>`: one JSON sample per second, then `__stats_end__` when stdout closes, so the panel falls back to polling instead of freezing on the last number.
-- `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
+- `run()` calls `tools::ensure_toolchain_path()` first (a Finder launch inherits launchd's `PATH`), registers the opener plugin, installs the menu from `menu::build` with `menu::dispatch`, builds the menu-bar item from `tray::build` (its Start/Stop forward a `tray` event to the window, which owns the action), manages the three states, prefetches profiles while the bundle loads, and lists every command in `tauri::generate_handler!` — missing there, a command is invisible even if it compiles. `RunEvent::Exit` kills both stream children.
 
-Command groups (97 total):
+Command groups (99 total):
 
-- **Profiles and Colima VM** (18): `list_profiles_cmd`, `status_cmd`, `start_cmd`, `stop_cmd`, `restart_cmd`, `delete_cmd`, `set_profile_cmd`, `profile_config_cmd`, `version_cmd`, `template_cmd`, `ssh_config_cmd`, `prune_cmd`, `update_cmd`, `nerdctl_install_cmd`, `vm_diagnostics_cmd`, `version_check_cmd`, `upgrade_cmd`, `app_release_cmd`
+- **Profiles and Colima VM** (19): `list_profiles_cmd`, `status_cmd`, `start_cmd`, `stop_cmd`, `restart_cmd`, `delete_cmd`, `recreate_profile_cmd`, `set_profile_cmd`, `profile_config_cmd`, `version_cmd`, `template_cmd`, `ssh_config_cmd`, `prune_cmd`, `update_cmd`, `nerdctl_install_cmd`, `vm_diagnostics_cmd`, `version_check_cmd`, `upgrade_cmd`, `app_release_cmd`
 - **AI** (8): `model_run_cmd`, `model_list_cmd`, `model_pull_cmd`, `model_setup_cmd`, `model_chat_cmd`, `model_serve_start_cmd`, `model_serve_stop_cmd`, `model_serve_status_cmd`
 - **Containers** (8): `list_containers_cmd`, `container_action_cmd`, `container_detail_cmd`, `container_logs_cmd`, `container_stats_cmd`, `container_stats_one_cmd`, `container_update_memory_cmd`, `inspect_cmd`
 - **Images** (5): `list_images_cmd`, `image_platforms_cmd`, `image_detail_cmd`, `image_pull_cmd`, `image_remove_cmd`
@@ -34,7 +34,7 @@ Command groups (97 total):
 - **Podman objects** (24): `podman_containers_cmd`, `podman_container_start_cmd`, `podman_container_stop_cmd`, `podman_container_restart_cmd`, `podman_container_remove_cmd`, `podman_container_logs_cmd`, `podman_container_detail_cmd`, `podman_container_inspect_json_cmd`, `podman_container_stats_cmd`, `podman_images_cmd`, `podman_image_pull_cmd`, `podman_image_remove_cmd`, `podman_image_detail_cmd`, `podman_image_inspect_cmd`, `podman_volumes_cmd`, `podman_volume_remove_cmd`, `podman_volume_detail_cmd`, `podman_volume_inspect_cmd`, `podman_networks_cmd`, `podman_network_remove_cmd`, `podman_network_detail_cmd`, `podman_network_inspect_cmd`, `podman_network_map_cmd`, `podman_disk_usage_cmd`
 - **Kubernetes** (4): `k8s_cluster_cmd`, `k8s_resources_cmd`, `k8s_logs_cmd`, `k8s_cluster_action_cmd`
 - **Host tools** (2): `system_status_cmd`, `lima_vms_cmd`
-- **Desktop** (1): `open_url_cmd` — http and https only; anything else is refused before `open` runs
+- **Desktop** (2): `open_url_cmd` — http and https only; anything else is refused before `open` runs; `tray_sync_cmd` — rebuilds the menu-bar item for the selected profile and its running state
 
 ### `src-tauri/src/colima.rs`
 
@@ -42,14 +42,14 @@ A thin wrapper around the `colima` binary.
 
 - `colima_bin()` resolves `colima` through `tools::which_bin()`, falling back to `/opt/homebrew/bin/colima` because GUI apps do not always inherit a shell `PATH`.
 - `run(args)` invokes with an argument array, returning stdout or `humanize()`d stderr, which unwraps logrus records (`time="…" level=fatal msg="…"`) so users see the error, not a JSON log line.
-- `list_profiles()` parses newline-delimited JSON (array fallback), cached 3 seconds behind a gate: a launch asks twice and the second caller joins the run in flight. `invalidate_profiles()` drops it after any change; `prefetch_profiles()` runs it on a thread.
+- `list_profiles()` parses newline-delimited JSON (array fallback), cached 10 seconds behind a gate: a launch asks twice and the second caller joins the run in flight. `invalidate_profiles()` drops it after any change; `prefetch_profiles()` runs it on a thread.
 - `status()` takes the first line starting with `{`, since log lines may precede it.
 - `instance_name()` maps a profile to its Lima instance (`colima` for default, else the name), naming its socket directory, kube context and disk image.
-- `start()` maps typed options to flags: CPU a count, memory and disk GiB; `list --json` reports bytes. `delete()` adds `--data` only on request — the sidebar delete keeps data, Settings → Delete profile removes it.
+- `start()` maps typed options to flags: CPU a count, memory and disk GiB; `list --json` reports bytes. It also maps networking (`--network-mode/interface/address`, gateway, repeated `--dns`/`--dns-host`, `--port-forwarder`), mounts (`--mount-type`, repeated `--mount`, `--mount-inotify`) and `--ssh-agent`, and `validate_start()` refuses what Colima would discard or misread before the CLI runs: a gateway whose last octet is not 2, a non-IP resolver, a bad ifname, `virtiofs` outside vz, a mount that starts with `-` or contains a comma. `delete()` adds `--data` only on request — the sidebar delete keeps data, Settings → Delete profile removes it. `recreate()` is stop → delete → start for the fields Colima reads only at creation.
 - `colima_home()` / `resolve_colima_home()` resolve the config home as the CLI does: `$COLIMA_HOME` if it exists, then `~/.colima`, then `$XDG_CONFIG_HOME/colima`, else `~/.colima`; existence alone decides, and the resolver is pure so precedence is testable.
 - `docker_endpoint(profile, status)` prefers the reported socket, else builds `unix://<config home>/<profile>/docker.sock`; that fallback lets `set_profile_cmd` configure the backend without `colima status` (about 1.3 s, never twice per switch), and `status_cmd` confirms the guess through `docker::confirm_endpoint`.
 - `disk_image(profile)` finds the sparse disk (`<config home>/_lima/<instance>/disk`, then `$LIMA_HOME`, then `~/.lima`) in allocated blocks, not apparent size.
-- `profile_config()` key/value-scans `<config home>/<profile>/colima.yaml` — not a full YAML parser, only the fields the UI needs; `template()` reads the template file and `ssh_config()` shells out to `colima ssh-config`.
+- `profile_config()` reads `<config home>/<profile>/colima.yaml` with a small YAML-subset reader — block maps and lists, inline `[]`/`{}`, quoted scalars, `null` — because the fields the UI needs are nested (`network`, `mounts`, `dnsHosts`, `kubernetes.k3sArgs`); a full YAML dependency was not worth that surface; `template()` reads the template file and `ssh_config()` shells out to `colima ssh-config`.
 - `volume_contents(profile, root, rel, limit)` lists one volume directory over `colima ssh` in one `find -printf` pass. It stops one row past `limit` (the page the browser asked for) and returns `truncated` when there is more; the hard ceiling stays 5000 entries and 4 MiB, and only the page crosses the IPC boundary.
 - `vm_diagnostics(profile)` runs one guest script over `colima ssh` (kernel, CPU count, load, uptime, memory and swap from `/proc/meminfo`, root and inode use, Docker state, OOM kills from the kernel log, and `/proc/sys/fs/binfmt_misc/rosetta`) and parses `key=value` lines; a stopped VM returns `ok: false` with Colima's message, so the page explains instead of blanking.
 - `version_check()` compares `colima version` with `abiosoft/colima`'s newest GitHub release and reports whether Homebrew can upgrade in place; `upgrade()` runs `brew upgrade colima` and refuses hand-installed binaries; `app_release_check()` does the same for this app (`dm0xa/runtime-desk`).
@@ -131,6 +131,10 @@ Kubernetes, read through the host `kubectl` against the profile's own context.
 The native menu bar, built in Rust so the system owns the accelerators: Runtime Desk (About, Services, Hide, Quit, Settings… `⌘,`), File (New Profile… `⌘N`, Close Window), Edit (undo/redo/cut/copy/paste/select-all routed to the focused field, Search… `⌘F`), View (Show Sidebar `⌘⌥S`, Refresh `⌘R`, Enter Full Screen), Window (minimize, zoom, bring all to front), Help.
 
 Items that change what the window shows never act on their own: `dispatch()` emits one `menu` event with the item id to the `main` webview, and `src/App.tsx` owns every destination (`settings`, `new-profile`, `search`, `refresh`, `toggle-sidebar`, `help`).
+
+### `src-tauri/src/tray.rs`
+
+The menu-bar item: the bundle icon plus a menu that names the selected profile and its state, with **Start**, **Stop**, **Show Runtime Desk** and **Quit**. `tray_sync_cmd` rebuilds it whenever the window's selection or running state changes; like the app menu, Start/Stop emit a `tray` event and the window runs the same `start_cmd`/`stop_cmd` path it uses everywhere else, so busy state, notices and the list refresh are not duplicated in Rust. Closing the window still quits (⌘Q or the tray's **Quit**); the item exists while the app runs.
 
 ## Frontend
 

@@ -10,7 +10,7 @@ Probed on start and after **Refresh** (⌘R). A missing tool hides the sections 
 
 The profile is the second gate: Containers, Images, Volumes, Networks, Activity, Sherlock, Cleanup and the log viewer read its socket, so a stopped profile shows **The `<profile>` profile is not running** with **Start profile** and **Recheck** and queries nothing; no profile shows **No Colima profile yet** with **New profile…**.
 
-Window 1300 × 820, minimum 900 × 600; menu bar Runtime Desk / File / Edit / View / Window / Help; size, position, maximized state and last screen return on relaunch.
+Window 1300 × 820, minimum 900 × 600; menu bar Runtime Desk / File / Edit / View / Window / Help; size, position, maximized state and last screen return on relaunch. A menu-bar item beside the clock starts and stops the selected profile (see [Menu bar](#menu-bar)).
 
 Shortcuts: ⌘N **New Profile…**, ⌘F or ⌘K search, ⌘R refresh, ⌘, Settings, ⌘⌥S sidebar, ⌘[ back, ⌘1–⌘9 first nine sections, ⌘0 last, ⌘W close. **?** in the status bar lists them; Esc closes a dialog or leaves edit mode.
 
@@ -54,9 +54,11 @@ One dialog serves that menu and Settings › General's **Delete profile…**: it
 
 ### Create a profile
 
-**+ Create new profile** below the list; fields go to `colima start`: name; CPUs, memory (GiB), disk (GiB); runtime (`docker`, `containerd`, `incus`); architecture (`aarch64`, `x86_64`); VM type (`vz`, `qemu`, `krunkit`); optional mount (`path:mode`, e.g. `~/projects:w`) and hostname; Rosetta (amd64, needs `vz`); **Kubernetes (k3s)**, about 300 MB inside the VM, plus optional `--k3s-arg` (empty keeps `--disable=traefik`).
+**+ Create new profile** below the list; fields go to `colima start`: name; CPUs, memory (GiB), disk (GiB); runtime (`docker`, `containerd`, `incus`); architecture (`aarch64`, `x86_64`); VM type (`vz`, `qemu`, `krunkit`); **Mount type** (`virtiofs` needs `vz`, `9p`, `sshfs`), a mounts list (path and a writable switch), inotify propagation and SSH-agent forwarding; hostname; Rosetta (amd64, needs `vz`); **Kubernetes (k3s)**, about 300 MB inside the VM, plus optional `--k3s-arg` (empty keeps `--disable=traefik`).
 
-The dialog starts from this Mac's architecture. Picking the other one switches the VM type to `qemu`, because `vz` and `krunkit` boot only the host architecture, and disables Rosetta, which needs a `vz` VM with an `aarch64` guest.
+**Network** fields: mode (`shared` or `bridged`), the host interface for bridged mode, port forwarder (`ssh`, TCP only; `grpc`, TCP **and UDP** but marked experimental by Colima; `none`), **Assign a reachable IP** (needs root; cannot be turned off again without recreating), and DNS resolvers. **Advanced networking** holds the gateway (last octet `2`), DNS hosts (`name=target`), preferred-route and host-address replication.
+
+The dialog starts from this Mac's architecture. Picking the other one switches the VM type to `qemu`, because `vz` and `krunkit` boot only the host architecture, disables Rosetta, which needs a `vz` VM with an `aarch64` guest, and moves `virtiofs` to `9p`.
 
 **Create & Start** runs `colima start` with those flags and selects the profile on success.
 
@@ -263,12 +265,18 @@ Search skips logs, environment variables and file systems.
 The selected Colima VM. Header icons: **Stop profile** and **Restart profile** while running, **Start `<profile>`** while stopped.
 
 - **Diagnostics**: live health over `colima ssh` — CPU load against the vCPU count, memory, root disk, Docker daemon state, recent OOM kills — over a summary line naming any pressure signal (or none). Prints kernel, uptime, inode and swap figures and offers **Copy report**. Verdict pill: Healthy / Attention / Reading… / Unavailable / Stopped. Memory amber at 80%, red at 90%; root disk amber at 75%, red at 85%; load above 1.5× the vCPU count, any OOM kill and inodes at 90% count as pressure.
-- **VM section**: running state with **Resources…** in its header, then architecture, VM type, CPUs, memory, disk, mount type, Rosetta (with the guest's live **active** or **not registered** chip once diagnostics answer, so the config flag is not taken on faith). Colima has no resize verb, so **Resources…** opens **Start `<profile>` with…**: `colima start` with the new values, **Start with these resources** disabled while running.
+- **VM section**: running state with **Resources…** in its header, then architecture, VM type, CPUs, memory, disk, mount type, mounts (`~/… (rw)`, `/data (ro)`), inotify propagation, SSH-agent forwarding, and Rosetta (with the guest's live **active** or **not registered** chip once diagnostics answer, so the config flag is not taken on faith). Colima has no resize verb, so **Resources…** opens **Start `<profile>` with…**: `colima start` with the new values, **Start with these resources** disabled while running.
+- **Network**: mode (with the interface when bridged), the reachable IP when assigned, port forwarder (a **UDP** chip on `grpc`), DNS resolvers, DNS hosts and gateway. **Change…** edits the fields `colima start` can still apply — DNS, forwarder, gateway — while the profile is stopped. Mode and the reachable IP are read only at creation and carry a `create-time` note.
+- **Recreate…**: for the fields Colima discards after the first boot — architecture, VM type, runtime, mount type, network mode, reachable IP. It stops the profile, runs `colima delete --force`, then starts it with every current setting preserved (resources, hostname, mounts, DNS, Kubernetes, SSH agent). **Keep images and containers** leaves Colima's runtime disk in place; **Delete them — a fresh VM** adds `--data`. Keeping data is only safe when runtime and mount type do not change. The profile name must be typed to confirm.
 - **Container runtime**: runtime, active client (`docker CLI` or `colima nerdctl`), driver, Docker socket, containerd socket.
 - **nerdctl**: whether the host `nerdctl` client is installed; when missing, **Install nerdctl** runs `colima nerdctl install` for the profile.
 - **Linux VMs on this host**: other Lima VMs from `limactl list`; without `limactl` the page says so instead of raising an error.
 
-Changing a profile's runtime is not done here; Colima requires recreating the profile.
+A profile's runtime is not editable in place: Colima reads it only at creation, so use **Recreate…**. Files inside the VM and the runtime's own data follow the data choice in that dialog.
+
+## Menu bar
+
+The app has a menu-bar item beside the clock for the selected profile: its name and `running`/`stopped`, **Start**, **Stop**, **Show Runtime Desk** and **Quit**. Start and Stop take the same path as the window — the status bar shows the busy state and the lists refresh — so the item never runs the CLI behind the window's back. Closing the window still quits the app, as in any Dock app; ⌘Q or **Quit** in the tray does the same.
 
 ## Kubernetes
 

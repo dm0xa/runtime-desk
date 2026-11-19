@@ -266,8 +266,35 @@ async function copyText(text: string) {
 
 const blankForm = {
   profile: "", cpus: 2, memory: 2, disk: 100, runtime: "docker", arch: "aarch64",
-  vm_type: "vz", rosetta: false, mount: "", hostname: "", kubernetes: false, k3s_arg: "",
+  vm_type: "vz", rosetta: false, hostname: "", kubernetes: false, k3s_arg: "",
+  network_mode: "shared", network_interface: "en0", network_address: false,
+  network_preferred_route: false, network_host_addresses: false,
+  gateway_address: "192.168.5.2", dns: "", dns_hosts: "",
+  port_forwarder: "ssh", ssh_agent: false, mount_type: "virtiofs",
+  mount_inotify: false, mounts: [{ location: "~", writable: true }] as { location: string; writable: boolean }[],
 };
+
+/** One `--mount` value: Colima's `:w`/`:ro` suffix, never a raw path that reads as a flag. */
+function mountArg(m: { location: string; writable: boolean }) {
+  return `${m.location.trim()}:${m.writable ? "w" : "ro"}`;
+}
+
+/** The create form keeps text where Colima takes repeated flags; this is the one conversion. */
+function startPayload(f: typeof blankForm) {
+  return {
+    profile: f.profile, cpus: f.cpus, memory: f.memory, disk: f.disk, runtime: f.runtime,
+    arch: f.arch, vm_type: f.vm_type, rosetta: f.rosetta, hostname: f.hostname,
+    kubernetes: f.kubernetes, k3s_arg: f.k3s_arg,
+    network_mode: f.network_mode, network_interface: f.network_interface,
+    network_address: f.network_address, network_preferred_route: f.network_preferred_route,
+    network_host_addresses: f.network_host_addresses, gateway_address: f.gateway_address,
+    dns: f.dns.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+    dns_hosts: f.dns_hosts.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+    port_forwarder: f.port_forwarder, ssh_agent: f.ssh_agent,
+    mount_type: f.mount_type, mount_inotify: f.mount_inotify,
+    mounts: f.mounts.filter((m) => m.location.trim()).map(mountArg),
+  };
+}
 
 /** Colima spells architectures `aarch64`/`x86_64`; image and host metadata says `arm64`/`amd64`.
  *  One normaliser so an amd64 image on an aarch64 VM is not read as a difference of spelling. */
@@ -294,6 +321,9 @@ function App() {
   });
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selected, setSelected] = useState("default");
+  /** The tray listener is registered once; it must read the current selection at click time. */
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const [status, setStatus] = useState<Status | null>(null);
   const [version, setVersion] = useState("");
   const [containers, setContainers] = useState<Container[]>([]);
@@ -376,6 +406,14 @@ function App() {
   const [pullRef, setPullRef] = useState<string | null>(null);
   /** Colima resizes a VM through `start`; this dialog exists only while the profile is stopped. */
   const [resize, setResize] = useState<{ cpus: string; memory: string; disk: string } | null>(null);
+  /** DNS, forwarder and gateway are applied by starting a stopped VM; no recreate needed. */
+  const [netEdit, setNetEdit] = useState<{ dns: string; dns_hosts: string; port_forwarder: string; gateway_address: string } | null>(null);
+  /** Creation-only fields need destroy + start; `keep_data` decides whether the disk survives. */
+  const [recreate, setRecreate] = useState<{
+    arch: string; vm_type: string; runtime: string; mount_type: string;
+    network_mode: string; network_interface: string; network_address: boolean;
+    rosetta: boolean; keep_data: boolean; confirm: string;
+  } | null>(null);
   const [networkScope, setNetworkScope] = useState<NetworkScope | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showPrune, setShowPrune] = useState(false);
@@ -877,6 +915,24 @@ function App() {
     setForm({ ...blankForm, arch: hostArch === "amd64" ? "x86_64" : "aarch64" });
     setShowCreate(true);
   }
+  function openNetEdit() {
+    if (!cfg) return;
+    setNetEdit({
+      dns: cfg.dns.join(", "),
+      dns_hosts: cfg.dns_hosts.map((h) => `${h.name}=${h.target}`).join("\n"),
+      port_forwarder: cfg.port_forwarder,
+      gateway_address: cfg.gateway_address,
+    });
+  }
+  function openRecreate() {
+    if (!cfg) return;
+    setRecreate({
+      arch: cfg.arch, vm_type: cfg.vm_type, runtime: cfg.runtime, mount_type: cfg.mount_type,
+      network_mode: cfg.network_mode, network_interface: cfg.network_interface,
+      network_address: cfg.network_address, rosetta: cfg.rosetta,
+      keep_data: true, confirm: "",
+    });
+  }
   const openCreateRef = useRef(openCreate);
   openCreateRef.current = openCreate;
   /** vz and krunkit cannot boot the other architecture; qemu is the only cross-arch VM type. */
@@ -1377,6 +1433,21 @@ function App() {
     return () => { alive = false; stop?.(); };
   }, []);
   useEffect(() => {
+    // The menu-bar item forwards Start/Stop here: the window owns busy state, notices and
+    // the refresh that follows, so the tray never runs the CLI on its own.
+    let stop: (() => void) | undefined;
+    let alive = true;
+    listen<string>("tray", (event) => {
+      const profile = selectedRef.current;
+      if (!profile) return;
+      if (event.payload === "tray-start") void act(() => invoke("start_cmd", { opts: { profile } }));
+      if (event.payload === "tray-stop") void act(() => invoke("stop_cmd", { profile }));
+    })
+      .then((unlisten) => { if (alive) stop = unlisten; else unlisten(); })
+      .catch(() => {});
+    return () => { alive = false; stop?.(); };
+  }, []);
+  useEffect(() => {
     // A Mac user right-clicks a row to see what it can do. The menu is the same one
     // the ⋯ trigger opens, so there is exactly one set of row actions to maintain.
     function onContextMenu(e: MouseEvent) {
@@ -1696,6 +1767,13 @@ function App() {
   const title = NAV.find((n) => n.id === tab)?.label ?? "";
   const running = profiles.filter((p) => p.status.toLowerCase() === "running");
   const selectedRunning = profiles.find((p) => p.name === selected)?.status.toLowerCase() === "running";
+  useEffect(() => {
+    // A menu-bar label is not worth a notice: if the item is missing the window still works.
+    void invoke("tray_sync_cmd", {
+      profile: profiles.length === 0 ? "No profile" : selected,
+      running: selectedRunning,
+    }).catch(() => {});
+  }, [selected, selectedRunning, profiles.length]);
   const diskLimitBytes = profiles.find((p) => p.name === selected)?.disk ?? 0;
   // Volume sizes need one `system df -v` scan; only pay for it while the list is open.
   const volSizesProfile = useRef<string | null>(null);
@@ -2914,7 +2992,6 @@ function App() {
                   <div className="kv"><span>CPUs</span><strong>{status?.cpu ?? cfg?.cpu ?? "—"}</strong></div>
                   <div className="kv"><span>Memory</span><strong>{status?.memory ? fmtBytes(status.memory) : cfg?.memory ? `${cfg.memory} GiB` : "—"}</strong></div>
                   <div className="kv"><span>Disk</span><strong>{status?.disk ? fmtBytes(status.disk) : cfg?.disk ? `${cfg.disk} GiB` : "—"}</strong></div>
-                  <div className="kv"><span>Mount</span><strong>{status?.mount_type ?? cfg?.mount_type ?? "—"}</strong></div>
                   <div className="kv"><span>Rosetta</span><strong>{cfg ? (cfg.rosetta ? "enabled" : "off") : "—"}{diag?.ok && (diag.rosetta_active || cfg?.rosetta) && (
                     <span
                       className={`arch-chip ${diag.rosetta_active ? "rosetta" : "emulated"}`}
@@ -2923,6 +3000,39 @@ function App() {
                         : "The profile asks for Rosetta but the guest never registered it; recreate the VM with Rosetta enabled"}
                     >{diag.rosetta_active ? "active" : "not registered"}</span>
                   )}</strong></div>
+                  <div className="kv"><span>Mount type</span><strong>{status?.mount_type ?? cfg?.mount_type ?? "—"} <span className="muted">· create-time</span></strong></div>
+                  <div className="kv"><span>Mounts</span><strong>{cfg ? (cfg.mounts.length ? cfg.mounts.map((m) => `${m.location} (${m.writable ? "rw" : "ro"})`).join(", ") : "none") : "—"}</strong></div>
+                  <div className="kv"><span>Mount inotify</span><strong>{cfg ? (cfg.mount_inotify ? "on" : "off") : "—"}</strong></div>
+                  <div className="kv"><span>SSH agent</span><strong>{cfg ? (cfg.ssh_agent ? "forwarded" : "off") : "—"}</strong></div>
+                </section>
+
+                <section className="panel">
+                  <div className="section-head">
+                    <div>
+                      <h3>Network</h3>
+                      <p className="muted">How the VM reaches this Mac and the LAN.</p>
+                    </div>
+                    <div className="linux-actions">
+                      <button
+                        className="btn ghost"
+                        disabled={busy || !cfg}
+                        title={selectedRunning ? "Stop the profile: networking is applied by colima start" : "Change DNS, the port forwarder and the gateway"}
+                        onClick={openNetEdit}
+                      >Change…</button>
+                      <button
+                        className="btn ghost"
+                        disabled={busy || !cfg}
+                        title="Mode and reachable IP are read only at creation: this destroys and starts the VM"
+                        onClick={openRecreate}
+                      >Recreate…</button>
+                    </div>
+                  </div>
+                  <div className="kv"><span>Mode</span><strong>{cfg?.network_mode ?? "—"}{cfg?.network_mode === "bridged" ? ` · ${cfg.network_interface}` : ""} <span className="muted">· create-time</span></strong></div>
+                  <div className="kv"><span>Reachable IP</span><strong>{cfg?.network_address ? (profiles.find((p) => p.name === selected)?.ip_address || "assigned") : "off"}</strong></div>
+                  <div className="kv"><span>Port forwarder</span><strong>{cfg?.port_forwarder ?? "—"}{cfg?.port_forwarder === "grpc" && <span className="arch-chip rosetta" title="grpc forwards UDP as well as TCP; Colima marks it experimental">UDP</span>}{cfg?.port_forwarder === "ssh" && <span className="muted"> · TCP only</span>}</strong></div>
+                  <div className="kv"><span>DNS</span><strong>{cfg?.dns.length ? cfg.dns.join(", ") : "host resolver"}</strong></div>
+                  <div className="kv"><span>DNS hosts</span><strong>{cfg?.dns_hosts.length ? cfg.dns_hosts.map((h) => `${h.name} → ${h.target}`).join(", ") : "—"}</strong></div>
+                  <div className="kv"><span>Gateway</span><strong>{cfg?.gateway_address || "—"}</strong></div>
                 </section>
 
                 <section className="panel">
@@ -3482,6 +3592,129 @@ function App() {
         </Dialog>
       )}
 
+      {netEdit && (
+        <Dialog label={`Network for ${selected}`} width={500} onClose={() => { if (!busy) setNetEdit(null); }}>
+          <h2>Network for {selected}</h2>
+          <p className="muted">
+            Applied by <code>colima start</code>, so the profile must be stopped. Mode and the reachable
+            IP are read only at creation — use <strong>Recreate…</strong> for those.
+          </p>
+          <div className="field">
+            <label>Port forwarder</label>
+            <Select label="Port forwarder" minWidth={0} value={netEdit.port_forwarder} options={[
+              { value: "ssh", label: "ssh — TCP only" },
+              { value: "grpc", label: "grpc — TCP + UDP" },
+              { value: "none", label: "none" },
+            ]} onChange={(v) => setNetEdit({ ...netEdit, port_forwarder: v })} />
+            <div className="field-hint">grpc carries UDP but is experimental.</div>
+          </div>
+          <div className="field">
+            <label>DNS resolvers</label>
+            <input value={netEdit.dns} aria-label="DNS resolvers" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="1.1.1.1, 8.8.8.8" onChange={(e) => setNetEdit({ ...netEdit, dns: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>DNS hosts</label>
+            <input value={netEdit.dns_hosts} aria-label="DNS hosts" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="myapp.local=192.168.1.100" onChange={(e) => setNetEdit({ ...netEdit, dns_hosts: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Gateway</label>
+            <input value={netEdit.gateway_address} aria-label="Gateway address" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setNetEdit({ ...netEdit, gateway_address: e.target.value })} />
+          </div>
+          <div className="modal-actions">
+            <button className="btn ghost" disabled={busy} onClick={() => setNetEdit(null)}>Cancel</button>
+            <button
+              className="btn primary"
+              disabled={busy || selectedRunning}
+              title={selectedRunning ? "Stop the profile first: colima start applies these" : undefined}
+              onClick={() => act(async () => {
+                await invoke("start_cmd", { opts: {
+                  profile: selected,
+                  dns: netEdit.dns.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
+                  dns_hosts: netEdit.dns_hosts.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
+                  port_forwarder: netEdit.port_forwarder,
+                  gateway_address: netEdit.gateway_address,
+                } });
+                activateProfile(selected).catch(() => undefined);
+                setNetEdit(null);
+                return `${selected} started with the new network settings`;
+              })}
+            >Start with these settings</button>
+          </div>
+        </Dialog>
+      )}
+
+      {recreate && (
+        <Dialog label={`Recreate ${selected}`} className="create-modal" onClose={() => { if (!busy) setRecreate(null); }}>
+          <h2>Recreate {selected}</h2>
+          <p className="muted">
+            Colima reads architecture, VM type, runtime, mount type and network mode only when it creates the
+            VM. Changing one means deleting and starting it again.
+          </p>
+          <div className="row2">
+            <div className="field"><label>Arch</label><Select label="Architecture" minWidth={0} value={recreate.arch} options={[{ value: "aarch64", label: "aarch64" }, { value: "x86_64", label: "x86_64" }]} onChange={(v) => setRecreate({ ...recreate, arch: v, vm_type: normalizeArch(v) === hostArch ? recreate.vm_type : "qemu", rosetta: normalizeArch(v) === hostArch ? recreate.rosetta : false, mount_type: normalizeArch(v) !== hostArch && recreate.mount_type === "virtiofs" ? "9p" : recreate.mount_type })} /></div>
+            <div className="field"><label>VM type</label><Select label="VM type" minWidth={0} value={recreate.vm_type} options={[{ value: "vz", label: "vz" }, { value: "qemu", label: "qemu" }, { value: "krunkit", label: "krunkit" }]} onChange={(v) => setRecreate({ ...recreate, vm_type: v, rosetta: v === "vz" ? recreate.rosetta : false, mount_type: v !== "vz" && recreate.mount_type === "virtiofs" ? "9p" : recreate.mount_type })} /></div>
+            <div className="field"><label>Runtime</label><Select label="Runtime" minWidth={0} value={recreate.runtime} options={[{ value: "docker", label: "docker" }, { value: "containerd", label: "containerd" }, { value: "incus", label: "incus" }]} onChange={(v) => setRecreate({ ...recreate, runtime: v })} /></div>
+          </div>
+          <div className="row2">
+            <div className="field"><label>Mount type</label><Select label="Mount type" minWidth={0} value={recreate.mount_type} options={[{ value: "virtiofs", label: "virtiofs" }, { value: "9p", label: "9p" }, { value: "sshfs", label: "sshfs" }]} onChange={(v) => setRecreate({ ...recreate, mount_type: v })} /></div>
+            <div className="field"><label>Network mode</label><Select label="Network mode" minWidth={0} value={recreate.network_mode} options={[{ value: "shared", label: "shared" }, { value: "bridged", label: "bridged" }]} onChange={(v) => setRecreate({ ...recreate, network_mode: v })} /></div>
+            <div className="field"><label>Interface</label><input value={recreate.network_interface} disabled={recreate.network_mode !== "bridged"} aria-label="Network interface" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setRecreate({ ...recreate, network_interface: e.target.value })} /></div>
+          </div>
+          <div className="field">
+            <label className="check"><input type="checkbox" checked={recreate.network_address} onChange={(e) => setRecreate({ ...recreate, network_address: e.target.checked })} /> Assign a reachable IP</label>
+          </div>
+          <div className="field">
+            <label className="check"><input type="checkbox" disabled={recreate.vm_type !== "vz" || normalizeArch(recreate.arch) !== "arm64"} checked={recreate.rosetta} onChange={(e) => setRecreate({ ...recreate, rosetta: e.target.checked })} /> Rosetta (amd64 emulation)</label>
+          </div>
+          <fieldset className="field">
+            <legend>Container data</legend>
+            <label className="check"><input type="radio" name="recreate-data" checked={recreate.keep_data} onChange={() => setRecreate({ ...recreate, keep_data: true })} /> Keep images and containers</label>
+            <label className="check"><input type="radio" name="recreate-data" checked={!recreate.keep_data} onChange={() => setRecreate({ ...recreate, keep_data: false })} /> Delete them — a fresh VM</label>
+            <div className="field-hint">
+              Keeping data is only safe when the runtime and mount type stay the same; a different runtime
+              starts an empty engine on the old disk.
+            </div>
+          </fieldset>
+          <div className="field">
+            <label>Type <code>{selected}</code> to confirm</label>
+            <input value={recreate.confirm} aria-label="Confirm profile name" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setRecreate({ ...recreate, confirm: e.target.value })} />
+          </div>
+          <div className="modal-actions">
+            <button className="btn ghost" disabled={busy} onClick={() => setRecreate(null)}>Cancel</button>
+            <button
+              className="btn primary"
+              disabled={busy || recreate.confirm !== selected || (!!hostArch && normalizeArch(recreate.arch) !== hostArch && recreate.vm_type !== "qemu")}
+              onClick={() => act(async () => {
+                await invoke("recreate_profile_cmd", {
+                  opts: {
+                    profile: selected,
+                    cpus: cfg?.cpu, memory: cfg?.memory, disk: cfg?.disk,
+                    runtime: recreate.runtime, arch: recreate.arch, vm_type: recreate.vm_type,
+                    rosetta: recreate.rosetta && recreate.vm_type === "vz" && normalizeArch(recreate.arch) === "arm64",
+                    hostname: cfg?.hostname,
+                    kubernetes: cfg?.kubernetes, k3s_arg: cfg?.k3s_args.join(","),
+                    mount_type: recreate.mount_type, mount_inotify: cfg?.mount_inotify,
+                    mounts: cfg?.mounts.map(mountArg),
+                    network_mode: recreate.network_mode, network_interface: recreate.network_interface,
+                    network_address: recreate.network_address,
+                    network_preferred_route: cfg?.network_preferred_route,
+                    network_host_addresses: cfg?.network_host_addresses,
+                    gateway_address: cfg?.gateway_address,
+                    dns: cfg?.dns,
+                    dns_hosts: cfg?.dns_hosts.map((h) => `${h.name}=${h.target}`),
+                    port_forwarder: cfg?.port_forwarder, ssh_agent: cfg?.ssh_agent,
+                  },
+                  deleteData: !recreate.keep_data,
+                });
+                await activateProfile(selected);
+                setRecreate(null);
+                return `${selected} recreated`;
+              })}
+            >Recreate &amp; Start</button>
+          </div>
+        </Dialog>
+      )}
+
       {pullRef !== null && (
         <Dialog label="Pull an image" width={460} onClose={() => { if (!busy) setPullRef(null); }}>
           <h2>Pull an image</h2>
@@ -3606,7 +3839,7 @@ function App() {
         />
       )}
       {showCreate && (
-        <Dialog label="New profile" onClose={() => setShowCreate(false)}>
+        <Dialog label="New profile" className="create-modal" onClose={() => setShowCreate(false)}>
             <h2>New profile</h2>
             <div className="field"><label>Name</label><input value={form.profile} autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" aria-label="Profile name" onChange={(e) => setForm({ ...form, profile: e.target.value })} placeholder="dev" /></div>
             <div className="row2">
@@ -3618,9 +3851,9 @@ function App() {
               <div className="field"><label>Runtime</label><Select label="Runtime" minWidth={0} value={form.runtime} options={[{ value: "docker", label: "docker" }, { value: "containerd", label: "containerd" }, { value: "incus", label: "incus" }]} onChange={(v) => setForm({ ...form, runtime: v })} /></div>
               <div className="field"><label>Arch</label><Select label="Architecture" minWidth={0} value={form.arch} options={[{ value: "aarch64", label: "aarch64" }, { value: "x86_64", label: "x86_64" }]} onChange={(v) => {
                 const cross = !!hostArch && normalizeArch(v) !== hostArch;
-                setForm({ ...form, arch: v, vm_type: cross ? "qemu" : form.vm_type, rosetta: cross ? false : form.rosetta });
+                setForm({ ...form, arch: v, vm_type: cross ? "qemu" : form.vm_type, rosetta: cross ? false : form.rosetta, mount_type: cross && form.mount_type === "virtiofs" ? "9p" : form.mount_type });
               }} /></div>
-              <div className="field"><label>VM type</label><Select label="VM type" minWidth={0} value={form.vm_type} options={[{ value: "vz", label: "vz" }, { value: "qemu", label: "qemu" }, { value: "krunkit", label: "krunkit" }]} onChange={(v) => setForm({ ...form, vm_type: v, rosetta: v === "vz" ? form.rosetta : false })} /></div>
+              <div className="field"><label>VM type</label><Select label="VM type" minWidth={0} value={form.vm_type} options={[{ value: "vz", label: "vz" }, { value: "qemu", label: "qemu" }, { value: "krunkit", label: "krunkit" }]} onChange={(v) => setForm({ ...form, vm_type: v, rosetta: v === "vz" ? form.rosetta : false, mount_type: v !== "vz" && form.mount_type === "virtiofs" ? "9p" : form.mount_type })} /></div>
             </div>
             {crossArch && (
               <div className="field-hint bad">
@@ -3628,12 +3861,97 @@ function App() {
               </div>
             )}
             <div className="field">
-              <label>Mount (optional)</label>
-              <input value={form.mount} autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" aria-label="Mount path and mode" onChange={(e) => setForm({ ...form, mount: e.target.value })} placeholder="~/projects:w" />
-              <div className="field-hint">path:mode — <code>~/projects:w</code> is writable, <code>:ro</code> read-only.</div>
+              <label>Mount type</label>
+              <Select label="Mount type" minWidth={0} value={form.mount_type} options={[
+                { value: "virtiofs", label: "virtiofs — fastest, needs vz" },
+                { value: "9p", label: "9p — qemu's stable choice" },
+                { value: "sshfs", label: "sshfs — most compatible" },
+              ]} onChange={(v) => setForm({ ...form, mount_type: v })} />
+              <div className="field-hint">Cannot change after the VM is created.</div>
+            </div>
+            <div className="field">
+              <label>Mounts</label>
+              {form.mounts.map((m, i) => (
+                <div className="mount-row" key={i}>
+                  <input
+                    value={m.location}
+                    aria-label={`Mount ${i + 1} path`}
+                    autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off"
+                    placeholder="~/projects"
+                    onChange={(e) => setForm({ ...form, mounts: form.mounts.map((x, j) => j === i ? { ...x, location: e.target.value } : x) })}
+                  />
+                  <label className="check"><input type="checkbox" checked={m.writable} onChange={(e) => setForm({ ...form, mounts: form.mounts.map((x, j) => j === i ? { ...x, writable: e.target.checked } : x) })} /> writable</label>
+                  <button className="icon-btn" type="button" aria-label={`Remove mount ${i + 1}`} onClick={() => setForm({ ...form, mounts: form.mounts.filter((_, j) => j !== i) })}>×</button>
+                </div>
+              ))}
+              <div className="settings-actions">
+                <button className="btn ghost" type="button" onClick={() => setForm({ ...form, mounts: [...form.mounts, { location: "", writable: false }] })}>+ Add mount</button>
+              </div>
+              <div className="field-hint">Colima's default is your home directory, writable; remove every row to mount nothing.</div>
+            </div>
+            <div className="field">
+              <label className="check"><input type="checkbox" checked={form.mount_inotify} onChange={(e) => setForm({ ...form, mount_inotify: e.target.checked })} /> Propagate inotify events</label>
+              <div className="field-hint">Experimental: file watchers inside the VM see changes made on this Mac.</div>
+            </div>
+            <div className="field">
+              <label className="check"><input type="checkbox" checked={form.ssh_agent} onChange={(e) => setForm({ ...form, ssh_agent: e.target.checked })} /> Forward SSH agent</label>
+              <div className="field-hint">Lets git and other tools inside the VM use this Mac's keys.</div>
             </div>
             <div className="field"><label>Hostname (optional)</label><input value={form.hostname} autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" aria-label="Hostname" onChange={(e) => setForm({ ...form, hostname: e.target.value })} /></div>
             <div className="field"><label className="check" title={form.vm_type === "vz" && normalizeArch(form.arch) === "arm64" ? "Runs linux/amd64 images through Rosetta" : "Rosetta translates amd64 binaries inside an arm64 vz VM"}><input type="checkbox" disabled={form.vm_type !== "vz" || normalizeArch(form.arch) !== "arm64"} checked={form.rosetta} onChange={(e) => setForm({ ...form, rosetta: e.target.checked })} /> Rosetta (amd64 emulation){form.vm_type !== "vz" ? <span className="muted"> — needs vz</span> : normalizeArch(form.arch) !== "arm64" ? <span className="muted"> — needs an arm64 VM</span> : null}</label></div>
+            <p className="form-section">Network</p>
+            <div className="row2">
+              <div className="field">
+                <label>Mode</label>
+                <Select label="Network mode" minWidth={0} value={form.network_mode} options={[
+                  { value: "shared", label: "shared" }, { value: "bridged", label: "bridged" },
+                ]} onChange={(v) => setForm({ ...form, network_mode: v })} />
+                <div className="field-hint">Bridged gives the VM a LAN address. Create-time.</div>
+              </div>
+              <div className="field">
+                <label>Interface</label>
+                <input value={form.network_interface} disabled={form.network_mode !== "bridged"} aria-label="Network interface" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setForm({ ...form, network_interface: e.target.value })} />
+                <div className="field-hint">Bridged mode only, e.g. <code>en0</code>.</div>
+              </div>
+              <div className="field">
+                <label>Port forwarder</label>
+                <Select label="Port forwarder" minWidth={0} value={form.port_forwarder} options={[
+                  { value: "ssh", label: "ssh — TCP only" },
+                  { value: "grpc", label: "grpc — TCP + UDP" },
+                  { value: "none", label: "none" },
+                ]} onChange={(v) => setForm({ ...form, port_forwarder: v })} />
+                <div className="field-hint">grpc carries UDP but is experimental.</div>
+              </div>
+            </div>
+            <div className="field">
+              <label className="check"><input type="checkbox" checked={form.network_address} onChange={(e) => setForm({ ...form, network_address: e.target.checked })} /> Assign a reachable IP</label>
+              <div className="field-hint">Needs root and slows the first boot. Once on, it cannot be turned off without recreating the VM.</div>
+            </div>
+            <div className="field">
+              <label>DNS resolvers</label>
+              <input value={form.dns} aria-label="DNS resolvers" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="1.1.1.1, 8.8.8.8" onChange={(e) => setForm({ ...form, dns: e.target.value })} />
+              <div className="field-hint">Comma-separated; empty keeps the host resolver.</div>
+            </div>
+            <details className="field">
+              <summary className="form-summary">Advanced networking</summary>
+              <div className="field">
+                <label>Gateway</label>
+                <input value={form.gateway_address} aria-label="Gateway address" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" onChange={(e) => setForm({ ...form, gateway_address: e.target.value })} />
+                <div className="field-hint">IPv4 address whose last octet is <code>2</code>.</div>
+              </div>
+              <div className="field">
+                <label>DNS hosts</label>
+                <input value={form.dns_hosts} aria-label="DNS hosts" autoCorrect="off" autoCapitalize="off" spellCheck={false} autoComplete="off" placeholder="myapp.local=192.168.1.100" onChange={(e) => setForm({ ...form, dns_hosts: e.target.value })} />
+                <div className="field-hint"><code>name=target</code>, comma-separated. Resolved by the VM's internal resolver.</div>
+              </div>
+              <div className="field">
+                <label className="check"><input type="checkbox" checked={form.network_preferred_route} onChange={(e) => setForm({ ...form, network_preferred_route: e.target.checked })} /> Prefer the assigned IP as the default route</label>
+              </div>
+              <div className="field">
+                <label className="check"><input type="checkbox" checked={form.network_host_addresses} onChange={(e) => setForm({ ...form, network_host_addresses: e.target.checked })} /> Replicate host IPs for port forwarding</label>
+                <div className="field-hint">Lets <code>-p 10.0.1.2:8080:8080</code> bind only that host address.</div>
+              </div>
+            </details>
             <div className="field">
               <label className="check" title="Provisions Colima's single-node k3s in this VM and points your kubeconfig at it"><input type="checkbox" checked={form.kubernetes} onChange={(e) => setForm({ ...form, kubernetes: e.target.checked })} /> Kubernetes (k3s)</label>
               <div className="field-hint">Adds about 300&nbsp;MB inside the VM. A profile created without it can enable Kubernetes later from the Kubernetes page.</div>
@@ -3648,7 +3966,7 @@ function App() {
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button className="btn ghost" onClick={() => setShowCreate(false)}>Cancel</button>
               <button className="btn primary" disabled={busy || !form.profile || (crossArch && form.vm_type !== "qemu")} onClick={() => act(async () => {
-                await invoke("start_cmd", { opts: { ...form, profile: form.profile } });
+                await invoke("start_cmd", { opts: startPayload(form) });
                 // The new VM is the one the lists must read: point the client at it before the
                 // selection changes, or every list keeps answering from the previous socket.
                 await activateProfile(form.profile, await safe(invoke<Profile[]>("list_profiles_cmd"), []));

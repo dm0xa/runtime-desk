@@ -318,6 +318,13 @@ button.topbar-back:hover { opacity: 1; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal { background: var(--panel); border: none; border-radius: 12px; padding: 20px; width: 440px; box-shadow: var(--shadow-pop); }
+/* New profile holds resources, network and storage; it scrolls instead of leaving the screen. */
+.create-modal { width: 560px; max-width: 94vw; max-height: 86vh; overflow-y: auto; }
+.form-section { margin: 18px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.form-summary { cursor: default; font-size: 12px; color: var(--muted); }
+.mount-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mount-row input[type="text"], .mount-row > input { flex: 1; min-width: 0; }
+.mount-row .check { margin: 0; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .modal h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .inv-delete-block { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }

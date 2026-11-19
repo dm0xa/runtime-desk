@@ -256,7 +256,13 @@ window.__TAURI_INTERNALS__ = {
           kernel: "6.8.0-117-generic", uptime: 200000, rosetta_active: true };
       case "app_release_cmd": return %(release)s;
       case "version_check_cmd": return null;
-      case "profile_config_cmd": return { vm_type: "vz", runtime: "docker", arch: "aarch64", mount_type: "virtiofs", cpu: 4, memory: 6, disk: 60, rosetta: true };
+      case "profile_config_cmd": return { vm_type: "vz", runtime: "docker", arch: "aarch64", mount_type: "virtiofs", cpu: 4, memory: 6, disk: 60, rosetta: true,
+          network_mode: "bridged", network_interface: "en0", network_address: true, network_preferred_route: false,
+          network_host_addresses: false, gateway_address: "192.168.5.2", dns: ["1.1.1.1", "8.8.8.8"],
+          dns_hosts: [{ name: "myapp.local", target: "192.168.1.100" }], port_forwarder: "grpc",
+          ssh_agent: true, mount_inotify: false, mounts: [{ location: "~", writable: true }, { location: "/data", writable: false }],
+          hostname: "colima", kubernetes: false, k3s_args: [] };
+      case "recreate_profile_cmd": case "tray_sync_cmd": return "";
       case "template_cmd": case "ssh_config_cmd": case "version_cmd": return "";
       case "events_start_cmd": return "polling";
       default: return null;

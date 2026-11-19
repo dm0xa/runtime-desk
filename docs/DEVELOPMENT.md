@@ -79,7 +79,7 @@ signatures in `src-tauri/src/lib.rs` and every `"<name>_cmd"` reference and `inv
 payload under `src/`, failing on a name mismatch, a dead handler, or a missing or invented key.
 camelCase and snake_case are normalised; `tauri::State`/`AppHandle`/`Window` parameters are skipped;
 variable and spread payloads are unchecked; `--self-test` proves a wrong shape and unknown name
-still fail. Today: 97 commands, 97 invoked, 0 problems, 14 unchecked call sites.
+still fail. Today: 99 commands, 99 invoked, 0 problems, 14 unchecked call sites.
 
 ### Headless layout and state checks
 

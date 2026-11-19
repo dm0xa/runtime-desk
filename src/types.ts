@@ -6,6 +6,8 @@ export type Profile = {
   memory?: number;
   disk?: number;
   runtime?: string;
+  /** Lima's `IPAddress`; present only when the VM has a reachable address. */
+  ip_address?: string;
 };
 
 export type Status = {
@@ -289,6 +291,8 @@ export type CleanupReport = {
   log_files: CleanupLogFile[];
   error: string | null;
 };
+export type MountSpec = { location: string; writable: boolean };
+export type DnsHost = { name: string; target: string };
 export type ProfileConfig = {
   vm_type: string;
   runtime: string;
@@ -298,6 +302,23 @@ export type ProfileConfig = {
   memory: number;
   disk: number;
   rosetta: boolean;
+  /** Immutable after creation: Colima discards a changed mode. */
+  network_mode: string;
+  network_interface: string;
+  network_address: boolean;
+  network_preferred_route: boolean;
+  network_host_addresses: boolean;
+  gateway_address: string;
+  dns: string[];
+  dns_hosts: DnsHost[];
+  /** ssh (TCP only), grpc (TCP + UDP, experimental) or none. */
+  port_forwarder: string;
+  ssh_agent: boolean;
+  mount_inotify: boolean;
+  mounts: MountSpec[];
+  hostname: string;
+  kubernetes: boolean;
+  k3s_args: string[];
 };
 
 export type PodmanMachine = {

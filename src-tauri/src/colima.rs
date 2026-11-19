@@ -170,6 +170,10 @@ pub struct Profile {
     pub disk: Option<u64>,
     #[serde(default)]
     pub runtime: Option<String>,
+    /// Lima's instance field is `IPAddress`; older shapes say `address`. Empty when the
+    /// VM has no reachable address (the default shared network).
+    #[serde(default, alias = "IPAddress", alias = "address", rename = "ip_address")]
+    pub ip_address: Option<String>,
 }
 
 /// `colima list --json` answers one question for the whole window, and the launch asks it
@@ -371,7 +375,21 @@ pub fn ssh_config(profile: &str) -> Result<String, String> {
 }
 
 
-#[derive(Deserialize, Clone, serde::Serialize)]
+#[derive(Deserialize, Clone, serde::Serialize, Debug, PartialEq)]
+pub struct DnsHost {
+    pub name: String,
+    pub target: String,
+}
+
+/// One row of Colima's `mounts:` list. `location` is the host path; `writable` is the
+/// `:w` suffix on the CLI flag.
+#[derive(Deserialize, Clone, serde::Serialize, Debug, PartialEq)]
+pub struct MountSpec {
+    pub location: String,
+    pub writable: bool,
+}
+
+#[derive(Deserialize, Clone, serde::Serialize, Debug, PartialEq)]
 pub struct ProfileConfig {
     pub vm_type: String,
     pub runtime: String,
@@ -381,6 +399,40 @@ pub struct ProfileConfig {
     pub memory: u32,
     pub disk: u32,
     pub rosetta: bool,
+    /// `shared` or `bridged`. Immutable after the VM exists: Colima discards a changed mode.
+    pub network_mode: String,
+    pub network_interface: String,
+    /// Assign a reachable IP. Once enabled it cannot be disabled without recreating.
+    pub network_address: bool,
+    pub network_preferred_route: bool,
+    pub network_host_addresses: bool,
+    pub gateway_address: String,
+    pub dns: Vec<String>,
+    pub dns_hosts: Vec<DnsHost>,
+    /// `ssh`, `grpc` or `none`. `grpc` is the only one that carries UDP.
+    pub port_forwarder: String,
+    pub ssh_agent: bool,
+    pub mount_inotify: bool,
+    pub mounts: Vec<MountSpec>,
+    /// Recreate reads these to preserve settings that `colima delete` would otherwise drop.
+    pub hostname: String,
+    pub kubernetes: bool,
+    pub k3s_args: Vec<String>,
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self {
+            vm_type: "vz".into(), runtime: "docker".into(), arch: "aarch64".into(),
+            mount_type: "virtiofs".into(), cpu: 2, memory: 2, disk: 60, rosetta: false,
+            network_mode: "shared".into(), network_interface: "en0".into(),
+            network_address: false, network_preferred_route: false, network_host_addresses: false,
+            gateway_address: "192.168.5.2".into(), dns: Vec::new(), dns_hosts: Vec::new(),
+            port_forwarder: "ssh".into(), ssh_agent: false, mount_inotify: false,
+            mounts: vec![MountSpec { location: "~".into(), writable: true }],
+            hostname: String::new(), kubernetes: false, k3s_args: Vec::new(),
+        }
+    }
 }
 
 pub fn profile_config(profile: &str) -> Result<ProfileConfig, String> {
@@ -392,25 +444,190 @@ pub fn profile_config(profile: &str) -> Result<ProfileConfig, String> {
 fn profile_config_in(home: &Path, profile: &str) -> Result<ProfileConfig, String> {
     let path = home.join(profile).join("colima.yaml");
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read config: {e}"))?;
-    let mut cfg = ProfileConfig { vm_type: "vz".into(), runtime: "docker".into(), arch: "aarch64".into(), mount_type: "virtiofs".into(), cpu: 2, memory: 2, disk: 60, rosetta: false };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') || !line.contains(':') { continue; }
-        let (k, v) = line.split_once(':').unwrap();
-        let v = v.trim().trim_matches('"');
-        match k.trim() {
-            "vmType" => cfg.vm_type = v.to_string(),
-            "runtime" => cfg.runtime = v.to_string(),
-            "arch" => cfg.arch = v.to_string(),
-            "mountType" => cfg.mount_type = v.to_string(),
-            "cpu" => cfg.cpu = v.parse().unwrap_or(cfg.cpu),
-            "memory" => cfg.memory = v.parse().unwrap_or(cfg.memory),
-            "disk" => cfg.disk = v.parse().unwrap_or(cfg.disk),
-            "rosetta" => cfg.rosetta = v == "true",
-            _ => {}
+    Ok(ProfileConfig::from_yaml(&parse_yaml(&text)))
+}
+
+/// A YAML subset reader. Colima writes a flat map whose only nested values we read are
+/// `network:` (a map), `mounts:` (a list of maps) and `dnsHosts:` (a map) — a full YAML
+/// dependency would be a large surface for that. Comments, blank lines, quoted scalars,
+/// inline `[]`/`{}`, `null`, block lists and block maps are all this needs.
+#[derive(Debug, PartialEq)]
+enum Yaml {
+    Scalar(String),
+    List(Vec<Yaml>),
+    Map(Vec<(String, Yaml)>),
+}
+
+impl Yaml {
+    fn get(&self, key: &str) -> Option<&Yaml> {
+        match self {
+            Yaml::Map(entries) => entries.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
         }
     }
-    Ok(cfg)
+
+    /// A scalar, or `None` for null/empty. Quoted values lose their quotes; `~` stays a
+    /// value because Colima writes the home mount as `location: "~"`.
+    fn text(&self) -> Option<&str> {
+        match self {
+            Yaml::Scalar(s) if !s.is_empty() && s != "null" => Some(s),
+            _ => None,
+        }
+    }
+
+    fn flag(&self) -> bool {
+        self.text() == Some("true")
+    }
+
+    fn int(&self) -> Option<u32> {
+        self.text()?.parse().ok()
+    }
+
+    fn items(&self) -> &[Yaml] {
+        match self {
+            Yaml::List(items) => items,
+            _ => &[],
+        }
+    }
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn yaml_scalar(raw: &str) -> Yaml {
+    let value = raw.trim();
+    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+        if inner.trim().is_empty() {
+            return Yaml::List(Vec::new());
+        }
+        return Yaml::List(inner.split(',').map(yaml_scalar).collect());
+    }
+    if value == "{}" {
+        return Yaml::Map(Vec::new());
+    }
+    Yaml::Scalar(value.trim_matches('"').trim_matches('\'').to_string())
+}
+
+/// A YAML mapping separator is `:` followed by a space or end of line. Without that rule a
+/// scalar list item such as `- https://mirror.gcr.io` would parse as a key and a value.
+fn yaml_pair(text: &str) -> Option<(&str, &str)> {
+    let (key, value) = text.split_once(':')?;
+    (value.is_empty() || value.starts_with(' ')).then_some((key, value))
+}
+
+/// `i` is the first line of the block; `indent` is the column its keys/items start at.
+/// Returns the value and the first line after the block.
+fn yaml_block(lines: &[(usize, &str)], mut i: usize, indent: usize) -> (Yaml, usize) {
+    if i < lines.len() && lines[i].0 == indent && lines[i].1.starts_with("- ") {
+        let mut items = Vec::new();
+        while i < lines.len() && lines[i].0 == indent && lines[i].1.starts_with("- ") {
+            let item = &lines[i].1[2..];
+            i += 1;
+            match yaml_pair(item) {
+                Some((key, value)) => {
+                    let mut entries = vec![(key.trim().to_string(), yaml_scalar(value))];
+                    // Continuation keys of the same list item (`- location:` then `writable:`).
+                    while i < lines.len() && lines[i].0 > indent && !lines[i].1.starts_with("- ") {
+                        if let Some((k, v)) = yaml_pair(lines[i].1) {
+                            entries.push((k.trim().to_string(), yaml_scalar(v)));
+                        }
+                        i += 1;
+                    }
+                    items.push(Yaml::Map(entries));
+                }
+                None => items.push(yaml_scalar(item)),
+            }
+        }
+        return (Yaml::List(items), i);
+    }
+
+    let mut entries = Vec::new();
+    while i < lines.len() && lines[i].0 == indent {
+        let (key, value) = match yaml_pair(lines[i].1) {
+            Some(pair) => pair,
+            None => { i += 1; continue; }
+        };
+        let key = key.trim().to_string();
+        let value = value.trim();
+        i += 1;
+        if value.is_empty() && i < lines.len() && lines[i].0 > indent {
+            let (child, next) = yaml_block(lines, i, lines[i].0);
+            entries.push((key, child));
+            i = next;
+        } else {
+            entries.push((key, yaml_scalar(value)));
+        }
+    }
+    (Yaml::Map(entries), i)
+}
+
+fn parse_yaml(text: &str) -> Yaml {
+    let lines: Vec<(usize, &str)> = text
+        .lines()
+        .map(|line| line.trim_end())
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .map(|line| (indent_of(line), line.trim_start()))
+        .collect();
+    yaml_block(&lines, 0, 0).0
+}
+
+impl ProfileConfig {
+    fn from_yaml(root: &Yaml) -> Self {
+        let mut cfg = Self::default();
+        if let Some(v) = root.get("vmType").and_then(Yaml::text) { cfg.vm_type = v.into(); }
+        if let Some(v) = root.get("runtime").and_then(Yaml::text) { cfg.runtime = v.into(); }
+        if let Some(v) = root.get("arch").and_then(Yaml::text) { cfg.arch = v.into(); }
+        if let Some(v) = root.get("mountType").and_then(Yaml::text) { cfg.mount_type = v.into(); }
+        if let Some(v) = root.get("cpu").and_then(Yaml::int) { cfg.cpu = v; }
+        if let Some(v) = root.get("memory").and_then(Yaml::int) { cfg.memory = v; }
+        if let Some(v) = root.get("disk").and_then(Yaml::int) { cfg.disk = v; }
+        if let Some(v) = root.get("rosetta") { cfg.rosetta = v.flag(); }
+        if let Some(v) = root.get("hostname").and_then(Yaml::text) { cfg.hostname = v.into(); }
+        if let Some(v) = root.get("portForwarder").and_then(Yaml::text) { cfg.port_forwarder = v.into(); }
+        if let Some(v) = root.get("forwardAgent") { cfg.ssh_agent = v.flag(); }
+        if let Some(v) = root.get("mountInotify") { cfg.mount_inotify = v.flag(); }
+        if let Some(v) = root.get("mounts") { cfg.mounts = mounts_from(v); }
+        if let Some(k8s) = root.get("kubernetes") {
+            if let Some(v) = k8s.get("enabled") { cfg.kubernetes = v.flag(); }
+            if let Some(v) = k8s.get("k3sArgs") {
+                cfg.k3s_args = v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect();
+            }
+        }
+        if let Some(net) = root.get("network") {
+            if let Some(v) = net.get("mode").and_then(Yaml::text) { cfg.network_mode = v.into(); }
+            if let Some(v) = net.get("interface").and_then(Yaml::text) { cfg.network_interface = v.into(); }
+            if let Some(v) = net.get("address") { cfg.network_address = v.flag(); }
+            if let Some(v) = net.get("preferredRoute") { cfg.network_preferred_route = v.flag(); }
+            if let Some(v) = net.get("hostAddresses") { cfg.network_host_addresses = v.flag(); }
+            if let Some(v) = net.get("gatewayAddress").and_then(Yaml::text) { cfg.gateway_address = v.into(); }
+            if let Some(v) = net.get("dns") { cfg.dns = v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect(); }
+            if let Some(Yaml::Map(entries)) = net.get("dnsHosts") {
+                cfg.dns_hosts = entries.iter()
+                    .filter_map(|(name, target)| target.text().map(|t| DnsHost { name: name.clone(), target: t.to_string() }))
+                    .collect();
+            }
+        }
+        // Older configs kept DNS at the top level.
+        if cfg.dns.is_empty() && let Some(v) = root.get("dns") {
+            cfg.dns = v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect();
+        }
+        cfg
+    }
+}
+
+fn mounts_from(value: &Yaml) -> Vec<MountSpec> {
+    value.items().iter().filter_map(|item| match item {
+        Yaml::Map(_) => {
+            let location = item.get("location").and_then(Yaml::text)?;
+            Some(MountSpec {
+                location: location.into(),
+                writable: item.get("writable").map(Yaml::flag).unwrap_or(false),
+            })
+        }
+        Yaml::Scalar(s) if !s.is_empty() && s != "null" => Some(MountSpec { location: s.clone(), writable: false }),
+        _ => None,
+    }).collect()
 }
 
 /// Model and runner names come from a text field and end up in colima's argv — and, for the
@@ -494,8 +711,26 @@ pub struct StartOpts {
     pub arch: Option<String>,
     pub vm_type: Option<String>,
     pub rosetta: Option<bool>,
-    pub mount: Option<String>,
+    /// `--mount`, one entry per directory; `["none"]` disables mounts.
+    pub mounts: Option<Vec<String>>,
+    /// Only applied when the VM is created (`--mount-type`).
+    pub mount_type: Option<String>,
+    pub mount_inotify: Option<bool>,
     pub hostname: Option<String>,
+    /// Immutable after creation: Colima discards a changed mode.
+    pub network_mode: Option<String>,
+    pub network_interface: Option<String>,
+    pub network_address: Option<bool>,
+    pub network_preferred_route: Option<bool>,
+    pub network_host_addresses: Option<bool>,
+    pub gateway_address: Option<String>,
+    /// Repeated `--dns`, one resolver per entry.
+    pub dns: Option<Vec<String>>,
+    /// Repeated `--dns-host`, each `name=target`.
+    pub dns_hosts: Option<Vec<String>>,
+    /// `ssh`, `grpc` or `none`.
+    pub port_forwarder: Option<String>,
+    pub ssh_agent: Option<bool>,
     /// Start the VM with Kubernetes (k3s). A profile created without it can enable it later
     /// from the Kubernetes page, but only by provisioning the running VM.
     pub kubernetes: Option<bool>,
@@ -507,6 +742,60 @@ pub struct StartOpts {
 /// sending it with qemu or krunkit would let the UI promise amd64 emulation that never runs.
 pub fn rosetta_applies(vm_type: Option<&str>) -> bool {
     matches!(vm_type, None | Some("vz"))
+}
+
+fn choice(what: &str, value: Option<&str>, allowed: &[&str]) -> Result<(), String> {
+    match value {
+        None => Ok(()),
+        Some(v) if allowed.contains(&v) => Ok(()),
+        Some(v) => Err(format!("{what} {v:?} is not one of {}", allowed.join(", "))),
+    }
+}
+
+/// Reject what Colima would either ignore or turn into a surprising VM: a bad resolver,
+/// a gateway whose last octet is not 2, an ifname longer than the kernel allows, a mount
+/// path that reads as a flag or splits the comma-separated string list.
+pub fn validate_start(o: &StartOpts) -> Result<(), String> {
+    choice("Network mode", o.network_mode.as_deref(), &["shared", "bridged"])?;
+    choice("Port forwarder", o.port_forwarder.as_deref(), &["ssh", "grpc", "none"])?;
+    choice("Mount type", o.mount_type.as_deref(), &["sshfs", "9p", "virtiofs"])?;
+    if o.mount_type.as_deref() == Some("virtiofs") && !matches!(o.vm_type.as_deref(), None | Some("vz")) {
+        return Err("virtiofs needs a vz VM: choose 9p or sshfs".into());
+    }
+    if let Some(iface) = o.network_interface.as_deref() {
+        let ok = !iface.is_empty() && iface.len() <= 15
+            && iface.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !ok {
+            return Err(format!("Network interface {iface:?} is not an interface name"));
+        }
+    }
+    if let Some(gateway) = o.gateway_address.as_deref() {
+        match gateway.parse::<std::net::Ipv4Addr>() {
+            Ok(ip) if ip.octets()[3] == 2 => {}
+            Ok(_) => return Err(format!("Gateway {gateway} must end in .2: Colima uses the last octet for the host")),
+            Err(_) => return Err(format!("Gateway {gateway:?} is not an IPv4 address")),
+        }
+    }
+    for dns in o.dns.iter().flatten() {
+        if dns.parse::<std::net::IpAddr>().is_err() {
+            return Err(format!("DNS resolver {dns:?} is not an IP address"));
+        }
+    }
+    for host in o.dns_hosts.iter().flatten() {
+        let Some((name, target)) = host.split_once('=') else {
+            return Err(format!("DNS host {host:?} must be name=target"));
+        };
+        if name.trim().is_empty() || target.trim().is_empty() {
+            return Err(format!("DNS host {host:?} must be name=target"));
+        }
+    }
+    for mount in o.mounts.iter().flatten() {
+        let mount = mount.trim();
+        if mount.is_empty() { return Err("A mount cannot be empty".into()); }
+        if mount.starts_with('-') { return Err(format!("Mount {mount:?} cannot start with '-'")); }
+        if mount.contains(',') { return Err(format!("Mount {mount:?} cannot contain a comma: Colima splits the list there")); }
+    }
+    Ok(())
 }
 
 /// A command that starts, stops, restarts or removes a profile: the list the window reads
@@ -529,17 +818,53 @@ fn start_args(o: &StartOpts) -> Vec<String> {
     if let Some(v) = &o.arch { a.push("--arch".into()); a.push(v.clone()); }
     if let Some(v) = &o.vm_type { a.push("--vm-type".into()); a.push(v.clone()); }
     if o.rosetta == Some(true) && rosetta_applies(o.vm_type.as_deref()) { a.push("--vz-rosetta".into()); }
-    if let Some(v) = &o.mount { if !v.trim().is_empty() { a.push("--mount".into()); a.push(v.clone()); } }
+    if let Some(v) = &o.mount_type { a.push("--mount-type".into()); a.push(v.clone()); }
+    for mount in o.mounts.iter().flatten() {
+        if !mount.trim().is_empty() { a.push("--mount".into()); a.push(mount.trim().to_string()); }
+    }
+    if o.mount_inotify == Some(true) { a.push("--mount-inotify".into()); }
     if let Some(v) = &o.hostname { if !v.trim().is_empty() { a.push("--hostname".into()); a.push(v.clone()); } }
+    if let Some(v) = &o.network_mode { a.push("--network-mode".into()); a.push(v.clone()); }
+    if let Some(v) = &o.network_interface { a.push("--network-interface".into()); a.push(v.clone()); }
+    if o.network_address == Some(true) { a.push("--network-address".into()); }
+    if o.network_preferred_route == Some(true) { a.push("--network-preferred-route".into()); }
+    if o.network_host_addresses == Some(true) { a.push("--network-host-addresses".into()); }
+    if let Some(v) = &o.gateway_address { if !v.trim().is_empty() { a.push("--gateway-address".into()); a.push(v.clone()); } }
+    for dns in o.dns.iter().flatten() {
+        if !dns.trim().is_empty() { a.push("--dns".into()); a.push(dns.trim().to_string()); }
+    }
+    for host in o.dns_hosts.iter().flatten() {
+        if !host.trim().is_empty() { a.push("--dns-host".into()); a.push(host.trim().to_string()); }
+    }
+    if let Some(v) = &o.port_forwarder { a.push("--port-forwarder".into()); a.push(v.clone()); }
+    if o.ssh_agent == Some(true) { a.push("--ssh-agent".into()); }
     if o.kubernetes == Some(true) { a.push("--kubernetes".into()); }
     if let Some(v) = &o.k3s_arg { if !v.trim().is_empty() { a.push("--k3s-arg".into()); a.push(v.clone()); } }
     a
 }
 
 pub fn start(o: &StartOpts) -> Result<String, String> {
+    validate_start(o)?;
     let a = start_args(o);
     let r: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
     run_mutation(&r)
+}
+
+/// Destroy the VM and start it again with options only creation can apply (`arch`,
+/// `vmType`, `runtime`, `mountType`, network mode). `delete_data` also drops the runtime
+/// disk; without it Colima keeps images and containers on the profile's disk.
+pub fn recreate(o: &StartOpts, delete_data: bool) -> Result<String, String> {
+    validate_start(o)?;
+    let running = list_profiles().unwrap_or_default().iter()
+        .any(|p| p.name == o.profile && p.status == "Running");
+    let stopped = if running { stop(&o.profile)? } else { String::new() };
+    let deleted = delete(&o.profile, delete_data, true).map_err(|e| format!("delete: {e}"))?;
+    let started = start(o).map_err(|e| format!("start: {e}"))?;
+    let mut out = String::new();
+    for step in [stopped, deleted, started] {
+        if !step.trim().is_empty() { if !out.is_empty() { out.push('\n'); } out.push_str(step.trim()); }
+    }
+    Ok(out)
 }
 
 pub fn stop(profile: &str) -> Result<String, String> {
@@ -1081,7 +1406,11 @@ mod tests {
         super::StartOpts {
             profile: profile.into(), cpus: Some(2), memory: Some(4), disk: Some(60),
             runtime: Some("docker".into()), arch: None, vm_type: Some("vz".into()), rosetta: None,
-            mount: None, hostname: None, kubernetes, k3s_arg: k3s_arg.map(str::to_string),
+            mounts: None, mount_type: None, mount_inotify: None, hostname: None,
+            network_mode: None, network_interface: None, network_address: None,
+            network_preferred_route: None, network_host_addresses: None, gateway_address: None,
+            dns: None, dns_hosts: None, port_forwarder: None, ssh_agent: None,
+            kubernetes, k3s_arg: k3s_arg.map(str::to_string),
         }
     }
 
@@ -1103,6 +1432,134 @@ mod tests {
         // An empty text field must not become an empty flag value.
         let blank = super::start_args(&opts("default", None, Some("   ")));
         assert!(!blank.iter().any(|a| a == "--k3s-arg"), "{blank:?}");
+    }
+
+    #[test]
+    fn network_mount_and_ssh_flags_are_mapped() {
+        let o = super::StartOpts {
+            network_mode: Some("bridged".into()), network_interface: Some("en1".into()),
+            network_address: Some(true), network_preferred_route: Some(true),
+            network_host_addresses: Some(true), gateway_address: Some("192.168.10.2".into()),
+            dns: Some(vec!["1.1.1.1".into(), "8.8.8.8".into()]),
+            dns_hosts: Some(vec!["example.com=1.2.3.4".into()]),
+            port_forwarder: Some("grpc".into()), ssh_agent: Some(true),
+            mount_type: Some("virtiofs".into()), mount_inotify: Some(true),
+            mounts: Some(vec!["~/projects:w".into(), "/data:ro".into()]),
+            ..opts("work", None, None)
+        };
+        super::validate_start(&o).unwrap();
+        let args = super::start_args(&o);
+        let joined = args.join(" ");
+        for expected in [
+            "--network-mode bridged", "--network-interface en1", "--network-address",
+            "--network-preferred-route", "--network-host-addresses", "--gateway-address 192.168.10.2",
+            "--port-forwarder grpc", "--ssh-agent", "--mount-type virtiofs", "--mount-inotify",
+        ] {
+            assert!(joined.contains(expected), "missing {expected}: {args:?}");
+        }
+        assert_eq!(args.iter().filter(|a| *a == "--dns").count(), 2);
+        assert_eq!(args.iter().filter(|a| *a == "--mount").count(), 2);
+        assert!(joined.contains("--dns-host example.com=1.2.3.4"), "{args:?}");
+        assert!(joined.contains("--mount ~/projects:w"), "{args:?}");
+    }
+
+    #[test]
+    fn invalid_start_values_are_refused_before_the_cli_runs() {
+        let bad_gateway = super::StartOpts { gateway_address: Some("192.168.10.3".into()), ..opts("default", None, None) };
+        assert!(super::validate_start(&bad_gateway).unwrap_err().contains(".2"));
+
+        let bad_dns = super::StartOpts { dns: Some(vec!["not-an-ip".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&bad_dns).unwrap_err().contains("DNS resolver"));
+
+        let bad_mode = super::StartOpts { network_mode: Some("host".into()), ..opts("default", None, None) };
+        assert!(super::validate_start(&bad_mode).unwrap_err().contains("Network mode"));
+
+        let bad_mount = super::StartOpts { mounts: Some(vec!["~/a,b:w".into()]), ..opts("default", None, None) };
+        assert!(super::validate_start(&bad_mount).unwrap_err().contains("comma"));
+
+        let bad_interface = super::StartOpts { network_interface: Some("bridge-interface-too-long".into()), ..opts("default", None, None) };
+        assert!(super::validate_start(&bad_interface).unwrap_err().contains("interface"));
+
+        let qemu_virtiofs = super::StartOpts { vm_type: Some("qemu".into()), mount_type: Some("virtiofs".into()), ..opts("default", None, None) };
+        assert!(super::validate_start(&qemu_virtiofs).unwrap_err().contains("virtiofs"));
+    }
+
+    #[test]
+    fn reads_network_mounts_and_ssh_from_colima_yaml() {
+        let text = r#"
+# Network configurations for the virtual machine.
+network:
+  address: true
+  mode: bridged
+  interface: en7
+  preferredRoute: true
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
+  dnsHosts:
+    myapp.local: 192.168.1.100
+    api.local: host.docker.internal
+  hostAddresses: true
+  gatewayAddress: 192.168.10.2
+
+forwardAgent: true
+portForwarder: grpc
+binfmt: true
+mountType: virtiofs
+mountInotify: true
+hostname: colima-dev
+
+kubernetes:
+  enabled: true
+  k3sArgs:
+    - --disable=traefik,servicelb
+
+mounts:
+    - location: "~"
+      writable: true
+    - location: /data
+      writable: false
+"#;
+        let cfg = super::ProfileConfig::from_yaml(&super::parse_yaml(text));
+        assert_eq!(cfg.network_mode, "bridged");
+        assert_eq!(cfg.network_interface, "en7");
+        assert!(cfg.network_address);
+        assert!(cfg.network_preferred_route);
+        assert!(cfg.network_host_addresses);
+        assert_eq!(cfg.gateway_address, "192.168.10.2");
+        assert_eq!(cfg.dns, ["8.8.8.8", "1.1.1.1"]);
+        assert_eq!(cfg.dns_hosts[0], super::DnsHost { name: "myapp.local".into(), target: "192.168.1.100".into() });
+        assert_eq!(cfg.dns_hosts[1].target, "host.docker.internal");
+        assert!(cfg.ssh_agent);
+        assert_eq!(cfg.port_forwarder, "grpc");
+        assert!(cfg.mount_inotify);
+        assert_eq!(cfg.hostname, "colima-dev");
+        assert!(cfg.kubernetes);
+        assert_eq!(cfg.k3s_args, ["--disable=traefik,servicelb"]);
+        assert_eq!(cfg.mounts, [
+            super::MountSpec { location: "~".into(), writable: true },
+            super::MountSpec { location: "/data".into(), writable: false },
+        ]);
+    }
+
+    #[test]
+    fn missing_and_disabled_mount_blocks_have_distinct_meanings() {
+        // No `mounts:` key: Colima's default home mount.
+        let defaulted = super::ProfileConfig::from_yaml(&super::parse_yaml("cpu: 2\nnetwork:\n  dns: null\n"));
+        assert_eq!(defaulted.mounts, [super::MountSpec { location: "~".into(), writable: true }]);
+        assert!(defaulted.dns.is_empty());
+        assert_eq!(defaulted.network_mode, "shared");
+
+        // `mounts: []` is an explicit "no mounts", not the default.
+        let disabled = super::ProfileConfig::from_yaml(&super::parse_yaml("mounts: []\n"));
+        assert!(disabled.mounts.is_empty());
+
+        let inline_dns = super::ProfileConfig::from_yaml(&super::parse_yaml("network:\n  dns: [9.9.9.9, 1.1.1.1]\n"));
+        assert_eq!(inline_dns.dns, ["9.9.9.9", "1.1.1.1"]);
+
+        // `- https://…` is a value, not a key: a mapping separator needs a space or EOL.
+        let urls = super::parse_yaml("mirrors:\n  - https://mirror.gcr.io\n");
+        assert_eq!(urls.get("mirrors").unwrap().items()[0], super::Yaml::Scalar("https://mirror.gcr.io".into()));
     }
 
     #[test]
