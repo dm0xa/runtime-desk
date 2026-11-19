@@ -6,6 +6,22 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.6.0 — 2026-11-19
+
+### Added
+
+- **A Compose project is now a health and cost page.** Open a project in Sherlock for every member's state, health probe, restarts, memory against its own limit and last exit — worst first, with start/restart on each faulty row.
+- **Footprint.** Which image each service runs and whether it is shared, stale or not pulled, which volumes it holds and how large they are, plus bind mounts.
+- **Project cost and topology.** Block I/O and pid totals beside the memory chart, member counts per network, and host-port collisions with other projects.
+
+### Changed
+
+- **One `docker inspect` per project.** Member details arrive in a single call instead of one per container.
+
+### Fixed
+
+- **Pages that draw no live numbers stop polling.** Only views with a running chart keep the one-second subscription.
+
 ## 1.5.1 — 2026-11-19
 
 ### Fixed
