@@ -24,7 +24,7 @@ import { PortChips } from "./PortChips";
 import { VolumeContents } from "./VolumeContents";
 import { FactsGroup, Row } from "./Facts";
 import { GroupStackChart } from "./GroupChart";
-import { ArrowUpRightIcon, BracesIcon, FingerprintIcon, SlidersIcon, TerminalIcon } from "./icons";
+import { ArrowUpRightIcon, BracesIcon, FingerprintIcon, PlayIcon, RestartIcon, SlidersIcon, TerminalIcon } from "./icons";
 import { InspectModal, type InspectTarget } from "./InspectModal";
 import { RefreshIcon } from "./RefreshIcon";
 import { Sparkline } from "./Sparkline";
@@ -58,6 +58,8 @@ type Props = {
   onOpenLogs: (container: Container) => void;
   /** Opens the memory-limit dialog, the in-app way out of an imminent OOM kill. */
   onSetMemoryLimit: (target: { id: string; name: string; used: number; current: number }) => void;
+  /** Start/restart a member from the health table, so a flagged row is fixable in place. */
+  onContainerAction: (id: string, action: "start" | "stop" | "restart") => void;
 };
 
 /** Seconds → "3d 4h" / "2h 14m" / "41s". */
@@ -491,13 +493,16 @@ type MemberFacts = { m: Container; d?: ContainerDetail };
 /** What is wrong with this project, per service. Every column answers a question a user asks
  *  when a stack misbehaves: is it up, does its health check pass, has it been restarted, how
  *  close is it to its memory ceiling, and how did the last run end. */
-function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: {
+function GroupHealth({ rows, snap, stale, memberError, onNavigate, onSetMemoryLimit, onContainerAction }: {
   rows: MemberFacts[];
   snap: ActivitySnapshot;
+  /** Member ids running an image older than the tag they name. */
+  stale: Set<string>;
   /** Set when the batch and its per-member fallback both failed: the table then says so. */
   memberError: string;
   onNavigate: (subject: Subject) => void;
   onSetMemoryLimit: (target: { id: string; name: string; used: number; current: number }) => void;
+  onContainerAction: (id: string, action: "start" | "stop" | "restart") => void;
 }) {
   const statOf = (m: Container) =>
     snap.stats.find((s) => s.id === m.id || s.name === m.name);
@@ -520,6 +525,19 @@ function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: 
   const uptime = oldest ? dur((Date.now() - oldest.at) / 1000) : null;
   const flagged = unhealthy.length + oom.length + badExit.length + pressured.length;
   const reading = snap.at === 0 && !snap.error;
+  /** Worst first, so the reason the page was opened is the first row. Rank uses only facts that
+   *  do not change every second (an OOM flag, an exit status, a probe result), so rows do not
+   *  swap places while someone reads them. */
+  const ordered = [...rows].sort((a, b) => {
+    const rank = (r: MemberFacts) =>
+      r.d?.oom_killed ? 0
+        : r.m.state !== "running" && (r.d?.exit_code ?? 0) !== 0 ? 1
+          : r.d?.health === "unhealthy" ? 2
+            : r.m.state !== "running" ? 3
+              : (r.d?.restart_count ?? 0) > 0 ? 4
+                : 5;
+    return rank(a) - rank(b) || serviceName(a.m, a.d).localeCompare(serviceName(b.m, b.d));
+  });
   /** The member to fix first: the one closest to its ceiling. */
   const worst = pressured.reduce<{ id: string; name: string; used: number; current: number; pct: number } | null>((top, r) => {
     const stat = statOf(r.m);
@@ -555,7 +573,7 @@ function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: 
         <span>State</span><span>Service</span><span>Health</span>
         <span className="right">Restarts</span><span className="right">Memory</span><span className="right">Last exit</span>
       </div>
-      {rows.map((r) => {
+      {ordered.map((r) => {
         const stat = statOf(r.m);
         const metered = stat && stat.mem_limit > 0 && stat.mem_pct >= PRESSURE_PCT;
         const state = r.m.state === "running" ? "running" : r.d && r.d.exit_code !== 0 ? "failed" : "stopped";
@@ -585,13 +603,23 @@ function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: 
                 {stat ? (stat.mem_limit > 0 ? `${stat.mem_pct.toFixed(1)}% of ${fmtBytes(stat.mem_limit)}` : `${fmtBytes(stat.mem)} · no limit`) : "—"}
               </span>
             )}
-            <span className="inv-member-num">
+            <span className="inv-member-num inv-service-exit">
               {r.m.state === "running"
                 ? <>up{r.d?.oom_killed && <span className="state-bad"> · OOM</span>}</>
                 : r.d
                   ? <>{r.d.oom_killed ? <span className="state-bad">OOM-killed</span> : <>exit {r.d.exit_code}</>}
                       {r.d.finished_at && startedOf(r.d.finished_at) !== "—" ? <span className="muted"> · {rel(r.d.finished_at)}</span> : null}</>
                   : "—"}
+              {(r.m.state !== "running" || stale.has(r.m.id) || (r.d?.restart_count ?? 0) > 0 || r.d?.health === "unhealthy") && (
+                <button
+                  className="icon-plain inv-service-action"
+                  onClick={() => onContainerAction(r.m.id, r.m.state === "running" ? "restart" : "start")}
+                  aria-label={r.m.state === "running" ? "Restart service" : "Start service"}
+                  title={r.m.state === "running" ? "Restart service" : "Start service"}
+                >
+                  {r.m.state === "running" ? <RestartIcon size={14} /> : <PlayIcon size={14} />}
+                </button>
+              )}
             </span>
           </div>
         );
@@ -613,9 +641,11 @@ function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: 
 
 /** What this project costs on disk: the images its containers run (including ones that are no
  *  longer local), the named volumes it mounts, and the total against the VM. */
-function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavigate }: {
+function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, stale, onNavigate }: {
   rows: MemberFacts[];
   images: Image[];
+  /** Member ids running an image older than the tag they name. */
+  stale: Set<string>;
   imageArch: Record<string, string>;
   imageDigest: Record<string, string>;
   volSizes: VolumeSize[];
@@ -660,18 +690,7 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavi
           const key = img ? img.id.replace(/^sha256:/, "") : "";
           const arch = img ? imageArch[key] : undefined;
           const digest = img ? imageDigest[key] : undefined;
-          // A container keeps the image id it started from. When the tag now points at other
-          // bits, the service is running yesterday's build until it is recreated.
-          const stale = img
-            ? rows
-                .filter((r) => r.m.image === ref && r.d?.image_id)
-                .filter((r) => {
-                  const started = (r.d?.image_id ?? "").replace(/^sha256:/, "");
-                  const localId = key;
-                  return started.length >= 12 && !(localId.startsWith(started) || started.startsWith(localId));
-                })
-                .map((r) => serviceName(r.m, r.d))
-            : [];
+          const older = rows.filter((r) => r.m.image === ref && stale.has(r.m.id)).map((r) => serviceName(r.m, r.d));
           const body = (
             <>
               <code>{ref}</code>
@@ -679,7 +698,7 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavi
                 {img ? fmtSize(sizes.get(ref) ?? 0) : <span className="state-bad">not pulled</span>}
                 {arch ? ` · ${arch}` : ""}
                 {` · ${services.get(ref)} service${services.get(ref) === 1 ? "" : "s"}`}
-                {stale.length ? <span className="state-bad"> · {stale.join(", ")} {stale.length === 1 ? "runs" : "run"} an older image, restart to apply</span> : null}
+                {older.length ? <span className="state-bad"> · {older.join(", ")} {older.length === 1 ? "runs" : "run"} an older image, restart to apply</span> : null}
               </span>
             </>
           );
@@ -721,7 +740,7 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavi
   );
 }
 
-export function InvestigatorPage({ subject, containers, images, volumes, networks, netMap, daemonUp, profile, refreshNonce, vmMemory, imageArch, imageDigest, volSizes, onPick, onNavigate, onOpenContainers, onOpenNetwork, onOpenLogs, onSetMemoryLimit }: Props) {
+export function InvestigatorPage({ subject, containers, images, volumes, networks, netMap, daemonUp, profile, refreshNonce, vmMemory, imageArch, imageDigest, volSizes, onPick, onNavigate, onOpenContainers, onOpenNetwork, onOpenLogs, onSetMemoryLimit, onContainerAction }: Props) {
   const [detail, setDetail] = useState<{ kind: Subject["kind"]; data: ContainerDetail | ImageDetail | VolumeDetail | NetworkDetail } | null>(null);
   const [inspect, setInspect] = useState<InspectTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -973,6 +992,16 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
     if (Number.isNaN(at) || at < 0) return min;
     return !min || at < min.at ? { at } : min;
   }, null);
+  /** Members whose image id no longer matches the local tag: they run the previous build until
+   *  the container is recreated. */
+  const groupStale = new Set(groupRows.flatMap((r) => {
+    if (!r.d?.image_id) return [];
+    const img = images.find((i) => `${i.repository}:${i.tag}` === r.m.image);
+    if (!img) return [];
+    const localId = img.id.replace(/^sha256:/, "");
+    const started = r.d.image_id.replace(/^sha256:/, "");
+    return started.length >= 12 && !(localId.startsWith(started) || started.startsWith(localId)) ? [r.m.id] : [];
+  }));
   /** Networks this project is attached to, and how many of its members are on each. */
   const groupNetworks = netMap
     .map((n) => ({ name: n.name, count: n.containers.filter((c) => groupMembers.some((m) => m.name === c.name)).length }))
@@ -1120,8 +1149,8 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       {subject.kind === "group" && (
         <>
           <GroupPerformance members={groupMembers} snap={snap} vmMemory={vmMemory} onNavigate={onNavigate} />
-          <GroupHealth rows={groupRows} snap={snap} memberError={memberError} onNavigate={onNavigate} onSetMemoryLimit={onSetMemoryLimit} />
-          <GroupFootprint rows={groupRows} images={images} imageArch={imageArch} imageDigest={imageDigest} volSizes={volSizes} onNavigate={onNavigate} />
+          <GroupHealth rows={groupRows} snap={snap} stale={groupStale} memberError={memberError} onNavigate={onNavigate} onSetMemoryLimit={onSetMemoryLimit} onContainerAction={onContainerAction} />
+          <GroupFootprint rows={groupRows} images={images} imageArch={imageArch} imageDigest={imageDigest} volSizes={volSizes} stale={groupStale} onNavigate={onNavigate} />
         </>
       )}
 

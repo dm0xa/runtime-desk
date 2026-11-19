@@ -2313,6 +2313,13 @@ function App() {
               onOpenNetwork={(network, names) => subject?.runtime === "podman" ? go({ tab: "podman-networks", trail: [], search: network }) : go({ tab: "containers", trail: [], search: "", networkScope: { network, names } })}
               onOpenLogs={(c) => setLogTarget({ id: c.id, name: c.name, runtime: subject?.runtime })}
               onSetMemoryLimit={setLimitTarget}
+              onContainerAction={(id, action) => {
+                // A restart must re-read the member's inspect, or the row keeps the old exit
+                // status and image id until the page is reopened.
+                void act(() => invoke("container_action_cmd", { id, action }),
+                  action === "start" ? "Container started" : action === "stop" ? "Container stopped" : "Container restarted")
+                  .then(() => setSubjectNonce((n) => n + 1));
+              }}
             />
           )}
 

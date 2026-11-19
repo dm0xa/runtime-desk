@@ -1106,6 +1106,10 @@ kbd { background: var(--panel-2); border: none; border-radius: 5px; padding: 1px
 .inv-service-row:last-of-type { box-shadow: none; }
 .inv-service-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .inv-service-row .inv-member-num { display: flex; gap: 4px; justify-content: flex-end; }
+.inv-service-exit { align-items: center; }
+/* The row's fix lives in the row: 22px, muted until the pointer arrives, so a table of six
+   facts still reads as a table and not as a toolbar. */
+.inv-service-action { width: 22px; height: 22px; margin-left: 2px; flex: none; }
 .inv-service-row .state-bad, .inv-group .state-bad { color: var(--red-text); }
 /* Footprint: one image per block, because a repo digest is wider than the link beside it. */
 .inv-image-row { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
