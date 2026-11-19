@@ -334,10 +334,16 @@ function sumAligned(lists: number[][]): number[] {
   return out;
 }
 
-/** The shared Activity stream, read once per page: every group panel draws the same second. */
-function useActivitySnapshot(): ActivitySnapshot {
+/** The shared Activity stream, read once per page: every group panel draws the same second.
+ *  Only the group page subscribes — a container page has its own stream, and an image or volume
+ *  page must not re-render once a second for numbers it never draws. */
+function useActivitySnapshot(active: boolean): ActivitySnapshot {
   const [snap, setSnap] = useState<ActivitySnapshot>(() => activitySnapshot());
-  useEffect(() => subscribeActivity(() => setSnap(activitySnapshot())), []);
+  useEffect(() => {
+    if (!active) return;
+    setSnap(activitySnapshot());
+    return subscribeActivity(() => setSnap(activitySnapshot()));
+  }, [active]);
   return snap;
 }
 
@@ -788,7 +794,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
    *  mounts live in `inspect`, so the group page reads them in one batched call. */
   const [memberDetails, setMemberDetails] = useState<Record<string, ContainerDetail>>({});
   const [memberError, setMemberError] = useState("");
-  const snap = useActivitySnapshot();
+  const snap = useActivitySnapshot(subject?.kind === "group");
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
   const running = container?.state === "running";
