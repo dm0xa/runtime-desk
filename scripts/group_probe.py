@@ -126,9 +126,12 @@ def _net(name, ip):
 
 def _detail(cid, name, image, state, health, restarts, policy, mem_limit, started_ms,
             finished_ms=None, mounts=None, networks=None, ports=None, oom=False, pid=1000,
-            exit_code=0):
+            exit_code=0, image_id=None):
     return {
-        "id": cid, "name": name, "image": image, "image_id": "sha256:" + "22" * 32,
+        "id": cid, "name": name, "image": image,
+        "image_id": image_id or {"nginx:1.27": "11" * 32, "ghcr.io/acme/api:2.4.1": "22" * 32,
+                                 "postgres:16": "33" * 32, "redis:7-alpine": "44" * 32}.get(image, "55" * 32),
+        
         "command": "", "created": iso(NOW_MS - 7 * 86400_000),
         "started_at": iso(started_ms), "finished_at": iso(finished_ms) if finished_ms else "0001-01-01T00:00:00Z",
         "state": state, "health": health, "restart_policy": policy, "restart_count": restarts,

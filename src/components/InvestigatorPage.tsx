@@ -491,10 +491,13 @@ type MemberFacts = { m: Container; d?: ContainerDetail };
 /** What is wrong with this project, per service. Every column answers a question a user asks
  *  when a stack misbehaves: is it up, does its health check pass, has it been restarted, how
  *  close is it to its memory ceiling, and how did the last run end. */
-function GroupHealth({ rows, snap, onNavigate }: {
+function GroupHealth({ rows, snap, memberError, onNavigate, onSetMemoryLimit }: {
   rows: MemberFacts[];
   snap: ActivitySnapshot;
+  /** Set when the batch and its per-member fallback both failed: the table then says so. */
+  memberError: string;
   onNavigate: (subject: Subject) => void;
+  onSetMemoryLimit: (target: { id: string; name: string; used: number; current: number }) => void;
 }) {
   const statOf = (m: Container) =>
     snap.stats.find((s) => s.id === m.id || s.name === m.name);
@@ -517,11 +520,24 @@ function GroupHealth({ rows, snap, onNavigate }: {
   const uptime = oldest ? dur((Date.now() - oldest.at) / 1000) : null;
   const flagged = unhealthy.length + oom.length + badExit.length + pressured.length;
   const reading = snap.at === 0 && !snap.error;
+  /** The member to fix first: the one closest to its ceiling. */
+  const worst = pressured.reduce<{ id: string; name: string; used: number; current: number; pct: number } | null>((top, r) => {
+    const stat = statOf(r.m);
+    if (!stat) return top;
+    return !top || stat.mem_pct > top.pct
+      ? { id: r.m.id, name: r.m.name, used: stat.mem, current: stat.mem_limit, pct: stat.mem_pct }
+      : top;
+  }, null);
 
   return (
     <section className="panel inv-wide">
       <div className="inv-panel-head">
         <h3>Health &amp; risk <span className="inv-count">{rows.length}</span></h3>
+        {worst && (
+          <button className="btn" onClick={() => onSetMemoryLimit(worst)} title={`${worst.name} is at ${worst.pct.toFixed(1)}% of ${fmtBytes(worst.current)}`}>
+            Raise the limit…
+          </button>
+        )}
         <span className="muted inv-note">
           {flagged === 0
             ? `no risk signals · ${restarts} restarts total${uptime ? ` · up ${uptime}` : ""}`
@@ -556,9 +572,19 @@ function GroupHealth({ rows, snap, onNavigate }: {
             <span className="inv-member-num">
               {r.d ? `${r.d.restart_count}${r.d.restart_policy && r.d.restart_count > 0 ? ` · ${r.d.restart_policy}` : ""}` : "—"}
             </span>
-            <span className={`inv-member-num${metered ? " state-bad" : ""}`}>
-              {stat ? (stat.mem_limit > 0 ? `${stat.mem_pct.toFixed(1)}% of ${fmtBytes(stat.mem_limit)}` : `${fmtBytes(stat.mem)} · no limit`) : "—"}
-            </span>
+            {metered && stat ? (
+              <button
+                className="inv-link inv-member-num state-bad inv-service-mem"
+                onClick={() => onSetMemoryLimit({ id: r.m.id, name: r.m.name, used: stat.mem, current: stat.mem_limit })}
+                title={`${r.m.name} is at ${stat.mem_pct.toFixed(1)}% of its limit — raise it before the kernel kills it`}
+              >
+                {stat.mem_pct.toFixed(1)}% of {fmtBytes(stat.mem_limit)}
+              </button>
+            ) : (
+              <span className="inv-member-num">
+                {stat ? (stat.mem_limit > 0 ? `${stat.mem_pct.toFixed(1)}% of ${fmtBytes(stat.mem_limit)}` : `${fmtBytes(stat.mem)} · no limit`) : "—"}
+              </span>
+            )}
             <span className="inv-member-num">
               {r.m.state === "running"
                 ? <>up{r.d?.oom_killed && <span className="state-bad"> · OOM</span>}</>
@@ -570,6 +596,9 @@ function GroupHealth({ rows, snap, onNavigate }: {
           </div>
         );
       })}
+      {memberError && (
+        <p className="muted inv-note"><span className="state-bad">Member details unavailable</span> — {memberError}</p>
+      )}
       {reading && <p className="muted">Reading live memory…</p>}
       {(unhealthy.length > 0 || noHealth.length > 0) && (
         <p className="muted inv-note">
@@ -631,6 +660,18 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavi
           const key = img ? img.id.replace(/^sha256:/, "") : "";
           const arch = img ? imageArch[key] : undefined;
           const digest = img ? imageDigest[key] : undefined;
+          // A container keeps the image id it started from. When the tag now points at other
+          // bits, the service is running yesterday's build until it is recreated.
+          const stale = img
+            ? rows
+                .filter((r) => r.m.image === ref && r.d?.image_id)
+                .filter((r) => {
+                  const started = (r.d?.image_id ?? "").replace(/^sha256:/, "");
+                  const localId = key;
+                  return started.length >= 12 && !(localId.startsWith(started) || started.startsWith(localId));
+                })
+                .map((r) => serviceName(r.m, r.d))
+            : [];
           const body = (
             <>
               <code>{ref}</code>
@@ -638,6 +679,7 @@ function GroupFootprint({ rows, images, imageArch, imageDigest, volSizes, onNavi
                 {img ? fmtSize(sizes.get(ref) ?? 0) : <span className="state-bad">not pulled</span>}
                 {arch ? ` · ${arch}` : ""}
                 {` · ${services.get(ref)} service${services.get(ref) === 1 ? "" : "s"}`}
+                {stale.length ? <span className="state-bad"> · {stale.join(", ")} {stale.length === 1 ? "runs" : "run"} an older image, restart to apply</span> : null}
               </span>
             </>
           );
@@ -704,6 +746,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   /** A project's members are only listed by the containers table; health, restarts, limits and
    *  mounts live in `inspect`, so the group page reads them in one batched call. */
   const [memberDetails, setMemberDetails] = useState<Record<string, ContainerDetail>>({});
+  const [memberError, setMemberError] = useState("");
   const snap = useActivitySnapshot();
 
   const container = subject?.kind === "container" ? containers.find((c) => c.id === subject.id) : undefined;
@@ -765,22 +808,32 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
   useEffect(() => {
     if (!memberIds) {
       setMemberDetails({});
+      setMemberError("");
       return;
     }
     let alive = true;
     const ids = memberIds.split(",");
+    /** Applies a batch and returns how many members it described. */
     const keep = (list: ContainerDetail[]) => {
-      if (!alive) return;
+      if (!alive) return 0;
       const next: Record<string, ContainerDetail> = {};
       for (const d of list) next[d.name] = d;
       setMemberDetails(next);
+      return Object.keys(next).length;
     };
     // One vanished container makes `docker inspect a b c` exit non-zero and print a partial
     // array, so a failed batch falls back to per-member reads instead of blanking the page.
+    // The error is only reported when the fallback recovered nothing either.
     invoke<ContainerDetail[]>("container_details_cmd", { ids })
-      .then((list) => keep(list ?? []))
-      .catch(() => Promise.allSettled(ids.map((id) => invoke<ContainerDetail>("container_detail_cmd", { id })))
-        .then((settled) => keep(settled.flatMap((r) => (r.status === "fulfilled" && r.value ? [r.value] : [])))));
+      .then((list) => { if (keep(list ?? [])) setMemberError(""); })
+      .catch((batchError: unknown) => Promise.allSettled(ids.map((id) => invoke<ContainerDetail>("container_detail_cmd", { id })))
+        .then((settled) => {
+          if (keep(settled.flatMap((r) => (r.status === "fulfilled" && r.value ? [r.value] : [])))) {
+            setMemberError("");
+          } else if (alive) {
+            setMemberError(String(batchError).slice(0, 120));
+          }
+        }));
     return () => { alive = false; };
   }, [memberIds, refreshNonce]);
 
@@ -1067,7 +1120,7 @@ export function InvestigatorPage({ subject, containers, images, volumes, network
       {subject.kind === "group" && (
         <>
           <GroupPerformance members={groupMembers} snap={snap} vmMemory={vmMemory} onNavigate={onNavigate} />
-          <GroupHealth rows={groupRows} snap={snap} onNavigate={onNavigate} />
+          <GroupHealth rows={groupRows} snap={snap} memberError={memberError} onNavigate={onNavigate} onSetMemoryLimit={onSetMemoryLimit} />
           <GroupFootprint rows={groupRows} images={images} imageArch={imageArch} imageDigest={imageDigest} volSizes={volSizes} onNavigate={onNavigate} />
         </>
       )}
