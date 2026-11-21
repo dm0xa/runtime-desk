@@ -6,6 +6,19 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+## 1.8.0 — 2026-11-22
+
+### Changed
+
+- **Cleanup is a decision, not a dashboard.** A rail says what can be freed and what is safe; one list below groups what is unused by risk.
+- **Cleanup measures Docker's own data disk.** Sizes are now against the disk Docker writes to, not the VM's root image.
+- **Volumes say they hold data.** Removing one arms as **Delete contents?**.
+- **The prune dialog lists only what it will remove.** Mounted volumes and cache held by a running build stay off the list.
+
+### Fixed
+
+- **A failed scan still says why.** It keeps the disk it did measure instead of printing zeroes.
+
 ## 1.7.0 — 2026-11-19
 
 ### Added
