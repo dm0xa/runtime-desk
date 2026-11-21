@@ -89,8 +89,12 @@ pub struct CleanupReport {
     pub root_total: u64,
     pub root_used: u64,
     /// `du` of /var/lib/docker in the guest: what the layers cost on disk, not Docker's
-    /// logical sum.
+    /// logical sum. Kept for the report; Cleanup shows the Docker data disk instead.
     pub docker_dir: u64,
+    /// `df` of the filesystem Docker's data lives on. Colima puts /var/lib/docker on a
+    /// separate data disk, so the VM root image's size is not this denominator.
+    pub docker_disk_total: u64,
+    pub docker_disk_used: u64,
     pub log_files: Vec<CleanupLogFile>,
     /// A `system df -v` failure (daemon down, client without the verbose format).
     pub error: Option<String>,
@@ -99,6 +103,7 @@ pub struct CleanupReport {
 /// `du` walks allocated blocks, so it answers "what does this cost the VM disk". Log
 /// files are read separately because they live outside the layer accounting.
 const GUEST_SCRIPT: &str = r#"df -k / | awk 'NR==2{print "root_total_kb="$2; print "root_used_kb="$3}'
+df -P -k /var/lib/docker | awk 'NR==2{print "docker_total_kb="$2; print "docker_used_kb="$3}'
 sudo -n du -sk /var/lib/docker 2>/dev/null | awk '{print "docker_kb="$1}'
 sudo -n find /var/lib/docker/containers -name '*-json.log' -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -8"#;
 
@@ -320,6 +325,8 @@ struct GuestScan {
     root_total: u64,
     root_used: u64,
     docker_dir: u64,
+    docker_total: u64,
+    docker_used: u64,
     logs: Vec<(u64, String)>,
 }
 
@@ -336,6 +343,8 @@ fn parse_guest(raw: &str) -> GuestScan {
                 "root_total_kb" => scan.root_total = value.trim().parse::<u64>().unwrap_or(0) * 1024,
                 "root_used_kb" => scan.root_used = value.trim().parse::<u64>().unwrap_or(0) * 1024,
                 "docker_kb" => scan.docker_dir = value.trim().parse::<u64>().unwrap_or(0) * 1024,
+                "docker_total_kb" => scan.docker_total = value.trim().parse::<u64>().unwrap_or(0) * 1024,
+                "docker_used_kb" => scan.docker_used = value.trim().parse::<u64>().unwrap_or(0) * 1024,
                 _ => {}
             }
             continue;
@@ -379,6 +388,8 @@ fn parse_report(df: &str, guest: &str, now: u64) -> CleanupReport {
         root_total: scan.root_total,
         root_used: scan.root_used,
         docker_dir: scan.docker_dir,
+        docker_disk_total: scan.docker_total,
+        docker_disk_used: scan.docker_used,
         log_files,
         ..Default::default()
     }
@@ -442,6 +453,8 @@ pub fn report(profile: &str) -> CleanupReport {
         report.root_total = scan.root_total;
         report.root_used = scan.root_used;
         report.docker_dir = scan.docker_dir;
+        report.docker_disk_total = scan.docker_total;
+        report.docker_disk_used = scan.docker_used;
         report.log_files = scan
             .logs
             .iter()
@@ -472,7 +485,7 @@ mod tests {
 {"Driver":"local","Links":"1","Mountpoint":"/var/lib/docker/volumes/data/_data","Name":"data","Size":"2MB"}
 ],"BuildCache":[]}"#;
 
-    const GUEST: &str = "root_total_kb=19221248\nroot_used_kb=1468788\ndocker_kb=1199304\n7101071\t/var/lib/docker/containers/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664-json.log\n17771\t/var/lib/docker/containers/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5-json.log\n";
+    const GUEST: &str = "root_total_kb=19221248\nroot_used_kb=1468788\ndocker_total_kb=102400000\ndocker_used_kb=17000000\ndocker_kb=1199304\n7101071\t/var/lib/docker/containers/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664-json.log\n17771\t/var/lib/docker/containers/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5-json.log\n";
 
     #[test]
     fn images_collapse_per_id_and_flag_dangling() {
@@ -542,6 +555,8 @@ mod tests {
         let r = parse_report(DF, GUEST, 1_800_000_000);
         assert_eq!(r.root_total, 19221248 * 1024);
         assert_eq!(r.docker_dir, 1199304 * 1024);
+        assert_eq!(r.docker_disk_total, 102400000 * 1024);
+        assert_eq!(r.docker_disk_used, 17000000 * 1024);
         assert_eq!(r.log_files.len(), 2);
         assert_eq!(r.log_files[0].size, 7_101_071);
         assert_eq!(r.log_files[0].container, "api");

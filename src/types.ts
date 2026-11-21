@@ -290,6 +290,9 @@ export type CleanupReport = {
   root_total: number;
   root_used: number;
   docker_dir: number;
+  /** `df` of the filesystem Docker's data lives on (Colima's separate data disk). */
+  docker_disk_total: number;
+  docker_disk_used: number;
   log_files: CleanupLogFile[];
   error: string | null;
 };
