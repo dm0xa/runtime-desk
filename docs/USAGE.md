@@ -387,31 +387,31 @@ Identifies the app rather than reporting state, the way a Mac About panel does: 
 
 ## Cleanup
 
-Tools → **Cleanup** answers three questions: what Docker holds, what nothing uses, what the VM costs on the Mac.
+Tools → **Cleanup** answers four questions in order: how much can I free, what is safe, where the space went, and what exactly is unused.
 
-Five numbers up top:
+The left rail holds the decision. **Can be freed** is the unique bytes the list can return, with its share of Docker's own accounting and the object count. **Safe now** is the prune dialog's defaults — dangling images, stopped containers, idle build cache. **Review first** is unused tagged images and volumes; a volume's files cannot be recovered. The green **Review & prune X…** is the page's one primary. **Rescan** sits beside `scanned` at the top of the list.
 
-- **VM disk on this Mac** — allocated size of the profile's sparse disk image, against its configured disk size; not compacted automatically. Opens Machine.
-- **Guest root** — used space inside the VM, amber from 75%, red from 85%. Opens Machine.
-- **Docker on the VM disk** — `du` of `/var/lib/docker`: what layers cost on disk, not Docker's logical sum.
-- **Docker logical size** — `docker system df` totals; opens Images.
-- **Nothing needs it** — unique bytes behind the removal lists below; jumps to Unused objects.
+**Docker data disk** is the disk Docker actually writes to, read with `df /var/lib/docker`: e.g. `16.0 GiB / 98.0 GiB · 16% used`. This is not the VM's root disk image. Below it, four rows give each category's held bytes, what can be freed, and the live count: `Images 15.9 GB · 9.5 GB can be freed · 5 active`, `Volumes 438 MB · 438 MB · none attached`, `Containers 2.6 MB · 74 kB · 3 running`, `Build cache — · nothing cached`. **Details** holds the client that answered, Docker's estimate and the log total.
 
-Card and legend jumps are drill-downs; the topbar back chevron (⌘[) returns.
+**Unused objects** is the working list, grouped by risk:
 
-The bar under them splits images, containers, volumes and build cache. Logical sizes count shared layers once per image, so they can exceed the allocated number; the sparse disk image gives space back to Docker but not always to macOS.
+- **Safe to remove** — the prune defaults; its group row gives the count and bytes.
+- **Review first** — unused tagged images and volumes; the bytes are amber.
+- **Held** — in-use cache layers and cluster-owned containers; they show `—` and the group says `frees nothing`.
 
-- **Unused objects** lists dangling images, stopped containers, unused volumes and build cache entries, largest first, each with its reason. **Age** is days since creation; hover for the timestamp. Docker keeps no last-use record for images or volumes, so build cache rows alone show a last use. Actions are icons: the fingerprint for Investigate, the trash can for **Remove** (a second click arms it), and a broom on build cache rows, opening the prune dialog. The header carries **Prune…**.
-- **Unused images** lists tagged images no container references; older than 30 days gets a **stale** badge. Removing one deletes every tag pointing at it, and **Unique** is what the removal actually frees. Same Investigate and Remove glyphs.
-- **Largest container logs** shows the biggest `*-json.log` files in the guest — outside Docker's totals, growing without limit unless the container sets `--log-opt max-size`.
+The list previews two safe, three review and up to three held rows; **Show N more** expands a group, **Show fewer** restores the preview. Kind chips (All, Images, Volumes, Containers, Build cache) filter every group. Inside a group, rows sort by **Frees**. The name cell's sub-line names the kind and the reason (`Image · no tag points at it`, `Volume · nothing mounts it`, `Container · exited 137`); the row's hover title keeps tags, image, mountpoint and full status. **Age** is days since creation; build cache shows its last use; 30 days or older adds the amber word **stale**.
 
-While the first scan runs the page shows a skeleton; Refresh re-reads and keeps the current report. It stays in memory, so leaving and returning shows it at once; it is reused for 60 seconds, then refreshed in the background.
+**Frees** counts only bytes that stay freed: unique image bytes, non-cluster container size, volume data, cache layers not in use. Actions are icons: the fingerprint for Investigate and the trash can for **Remove** (a second click arms it; a volume asks **Delete contents?**). Build cache has no per-row action because prune clears it with the rest.
 
-The report is read through the profile's container client — nerdctl on containerd profiles, the Docker CLI on Docker, as fallback — when you open the page, after a removal, or on Refresh.
+**Container logs** appears below the workspace only when the listed files reach 10 MB; it is outside Docker's totals and grows without a limit unless the container sets `--log-opt max-size`. Smaller logs are named in the rail's Details.
+
+While the first scan runs the page shows a skeleton; Rescan or the header Refresh re-reads and keeps the current report. It stays in memory, so leaving and returning shows it at once; it is reused for 60 seconds, then refreshed in the background. If Docker cannot be read, the page prints the reason and keeps only the data disk it did measure; it never draws zeroes as if "nothing unused" had been measured.
+
+The report is read through the profile's container client — nerdctl on containerd profiles, the Docker CLI on Docker, as fallback — when you open the page, after a removal, or on Refresh or Rescan.
 
 ## Prune
 
-From the broom icon in the Containers, Images and Volumes headers, **Prune…** in Cleanup's Unused objects panel, and Settings → General → **Prune Docker data…**.
+From the broom icon in the Containers, Images and Volumes headers, the Cleanup hero's **Review & prune <size>…** (or the list's **Prune…**), and Settings → General → **Prune Docker data…**.
 
 Six categories, each listing what it would remove:
 

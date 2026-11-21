@@ -1,13 +1,30 @@
-import { useRef } from "react";
+import { Fragment, useState } from "react";
 import type { CleanupReport } from "../types";
-import { fmtSize } from "../lib/format";
+import { fmtBytes, fmtSize } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { ConfirmButton } from "./ConfirmButton";
 import { BroomIcon, FingerprintIcon, TrashIcon } from "./icons";
 import { RefreshIcon } from "./RefreshIcon";
 
-/** An image nothing has used for this long is called stale in the list. */
+/** An object nothing has used for this long is called stale in the list. */
 const STALE_DAYS = 30;
+
+type ObjectKind = "image" | "container" | "volume" | "cache";
+type Safety = "safe" | "review" | "held";
+
+const KIND_LABEL: Record<ObjectKind, string> = {
+  image: "Images",
+  container: "Containers",
+  volume: "Volumes",
+  cache: "Build cache",
+};
+
+const KIND_SINGULAR: Record<ObjectKind, string> = {
+  image: "Image",
+  container: "Container",
+  volume: "Volume",
+  cache: "Cache",
+};
 
 type Props = {
   report: CleanupReport | null;
@@ -15,10 +32,10 @@ type Props = {
   busy: boolean;
   profile: string;
   running: boolean;
-  /** Bytes, as `colima list --json` reports it; the strip converts to the configured GiB. */
-  diskLimitBytes: number;
-  onOpenTab: (tab: "images" | "containers" | "volumes" | "runtimes") => void;
+  /** When the report on screen was read; the page keeps it for a minute before re-reading. */
+  readAt: number | null;
   onPrune: () => void;
+  onRescan: () => void;
   onRemoveImage: (id: string) => void;
   onRemoveVolume: (name: string) => void;
   onRemoveContainer: (id: string) => void;
@@ -27,35 +44,100 @@ type Props = {
 
 const shortId = (id: string) => id.replace(/^sha256:/, "").slice(0, 12);
 
+/** A group preview is two rows of Safe and three of Review; sixty objects stay a
+ *  scroll, but all three risk headers are on screen before the first scroll. */
+const GROUP_PREVIEW = 3;
+const SAFE_PREVIEW = 2;
+
 const fmtAge = (days: number | null) => {
   if (days === null) return "unknown";
   if (days === 0) return "today";
   return `${days} day${days === 1 ? "" : "s"}`;
 };
 
-/** First-load shape: nothing is known yet, so the strip and the tables show placeholders
- * instead of zeroes or an empty-state claim that the scan has not earned. */
-function StorageSkeleton() {
+/** One row of the unused list. `freed` is the only byte count the page totals: what a
+ *  removal gives back for good. */
+type Candidate = {
+  key: string;
+  kind: ObjectKind;
+  safety: Safety;
+  name: string;
+  nameTitle?: string;
+  why: string;
+  whyTitle?: string;
+  age: string;
+  ageTitle?: string;
+  stale: boolean;
+  freed: number;
+  freedTitle: string;
+  k8s?: boolean;
+  data?: boolean;
+  investigate?: () => void;
+  remove?: () => void;
+  removeLabel?: string;
+  removeTitle?: string;
+};
+
+function CandidateRow({ c, busy }: { c: Candidate; busy: boolean }) {
   return (
-    <>
-      <div className="strip-items cleanup-strip" aria-hidden="true">
-        {Array.from({ length: 5 }, (_, i) => (
-          <div className="strip-item" key={i}>
-            <span className="cleanup-skeleton skeleton-label" />
-            <span className="cleanup-skeleton skeleton-value" />
-            <span className="cleanup-skeleton skeleton-sub" />
-          </div>
-        ))}
+    <tr>
+      <td className="cleanup-name" title={c.nameTitle ?? c.name}>
+        <span className="cleanup-name-main">
+          {c.k8s && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster; its controller recreates it">k8s</span>}
+          <span className="cleanup-name-text">{c.name}</span>
+          {c.data && <span className="cleanup-data" title="Removing the volume deletes the files inside">data</span>}
+        </span>
+        <span className="cleanup-name-sub" title={c.whyTitle ?? c.why}>{KIND_SINGULAR[c.kind]} · {c.why}</span>
+      </td>
+      <td className="cleanup-age" title={c.ageTitle}>
+        {c.age}
+        {c.stale && <span className="cleanup-stale" title={`Older than ${STALE_DAYS} days`}>stale</span>}
+      </td>
+      <td className={`cleanup-freed${c.freed > 0 ? "" : " zero"}`} title={c.freedTitle}>
+        {c.freed > 0 ? fmtSize(c.freed) : "—"}
+      </td>
+      <td>
+        <div className="actions">
+          {c.investigate && (
+            <button className="icon-btn" title="Investigate" aria-label={`Investigate ${c.name}`} onClick={c.investigate}>
+              <FingerprintIcon />
+            </button>
+          )}
+          {c.remove && (
+            <ConfirmButton
+              label={`Remove ${c.name}`}
+              confirmLabel={c.removeLabel ?? "Remove?"}
+              title={c.removeTitle ?? `Remove ${c.name}`}
+              icon={<TrashIcon size={14} />}
+              disabled={busy}
+              onConfirm={c.remove}
+            />
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** The Docker data filesystem, which is a separate disk from the VM's root image. */
+function DiskMeter({ used, total }: { used: number; total: number }) {
+  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  const tone = pct >= 95 ? "bad" : pct >= 85 ? "warn" : "";
+  return (
+    <div className="cleanup-disk">
+      <div className="cleanup-disk-line">
+        <span>Docker data disk</span>
+        <b>{total > 0 ? `${fmtBytes(used)} / ${fmtBytes(total)}` : "not measured"}</b>
       </div>
-      <div className="cleanup-bar-skeleton" aria-hidden="true">
-        <span className="cleanup-skeleton" style={{ width: "62%" }} />
+      {total > 0 && (
+        <div className="cleanup-meter">
+          <span className={tone} style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      <div className="cleanup-disk-sub">
+        {total > 0 ? `${pct}% used` : "Docker's filesystem was not reported"}
       </div>
-      <div className="cleanup-legend" aria-hidden="true">
-        {[92, 84, 76, 68].map((width) => (
-          <span key={width} className="cleanup-skeleton skeleton-legend" style={{ width }} />
-        ))}
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -74,25 +156,12 @@ function SkeletonRows({ rows }: { rows: number }) {
   );
 }
 
-function Legend({ label, value, color, onOpen }: { label: string; value: number; color: string; onOpen?: () => void }) {
-  const content = (
-    <>
-      <span className="cleanup-dot" style={{ background: color }} aria-hidden="true" />
-      {label} <strong>{fmtSize(value)}</strong>
-    </>
-  );
-  return onOpen ? (
-    <button className="cleanup-legend-item cleanup-legend-link" onClick={onOpen} title={`Open ${label}`}>{content}</button>
-  ) : (
-    <span className="cleanup-legend-item">{content}</span>
-  );
-}
-
-export function CleanupPage({ report, loading, busy, profile, running, diskLimitBytes, onOpenTab, onPrune, onRemoveImage, onRemoveVolume, onRemoveContainer, onInvestigate }: Props) {
-  const unusedRef = useRef<HTMLElement>(null);
+export function CleanupPage({ report, loading, busy, profile, running, readAt, onPrune, onRescan, onRemoveImage, onRemoveVolume, onRemoveContainer, onInvestigate }: Props) {
+  const [kindFilter, setKindFilter] = useState<"all" | ObjectKind>("all");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const images = report?.images ?? [];
-  const dangling = images.filter((i) => i.dangling);
   const unused = images.filter((i) => !i.dangling && i.containers === 0);
+  const dangling = images.filter((i) => i.dangling);
   const stopped = (report?.containers ?? []).filter((c) => !c.running);
   const unusedVolumes = (report?.volumes ?? []).filter((v) => v.links === 0);
   const cache = report?.build_cache ?? [];
@@ -105,162 +174,208 @@ export function CleanupPage({ report, loading, busy, profile, running, diskLimit
   const cacheBytes = totals?.build_cache ?? 0;
   const logical = imageBytes + containerBytes + volumeBytes + cacheBytes;
 
-  // Unique bytes, not image size: shared base layers survive as long as another image uses
-  // them, so the honest saving is the part only the removed image holds.
-  // A kubelet recreates its container, so its bytes are not savings the user can bank.
-  const reclaimable = [...dangling, ...unused].reduce((n, i) => n + i.unique, 0)
-    + stopped.filter((c) => !isKubernetesName(c.name)).reduce((n, c) => n + c.size, 0)
-    + unusedVolumes.reduce((n, v) => n + v.size, 0)
-    + cache.reduce((n, c) => n + c.size, 0);
-  const staleCount = unused.filter((i) => i.age_days !== null && i.age_days >= STALE_DAYS).length;
-
-  // `colima list --json` reports the configured disk in bytes; older data may already be GiB.
-  const limitGiB = diskLimitBytes > 1024 * 1024 ? Math.round(diskLimitBytes / 1024 ** 3) : diskLimitBytes;
-  const hostPct = limitGiB > 0 && report?.host_disk ? Math.min(100, Math.round((report.host_disk / (limitGiB * 1024 ** 3)) * 100)) : 0;
-  const rootPct = report?.root_total ? Math.round((report.root_used / report.root_total) * 100) : 0;
-
-  // Magnitude is tone, not hue: the same ink mix the volume map uses, four steps of
-  // `--text` over the panel. The accent stays reserved for interaction.
-  const segments: { key: string; label: string; value: number; tone: number; color: string; open?: () => void }[] = [
-    { key: "images", label: "Images", value: imageBytes, tone: 55, open: () => onOpenTab("images") },
-    { key: "containers", label: "Containers", value: containerBytes, tone: 40, open: () => onOpenTab("containers") },
-    { key: "volumes", label: "Volumes", value: volumeBytes, tone: 27, open: () => onOpenTab("volumes") },
-    { key: "cache", label: "Build cache", value: cacheBytes, tone: 15 },
-  ]
-    .filter((s) => s.value > 0)
-    .map((s) => ({ ...s, color: `color-mix(in srgb, var(--text) ${s.tone}%, transparent)` }));
-
-  const jumpToUnused = () => {
-    const target = unusedRef.current;
-    if (!target) return;
-    target.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    target.focus({ preventScroll: true });
-  };
-  const metrics: { key: string; label: string; value: string; sub: string; tone: string; open?: () => void; hint?: string }[] = [
-    {
-      key: "disk",
-      label: "VM disk on this Mac",
-      value: fmtSize(report?.host_disk ?? 0),
-      sub: limitGiB > 0 ? `${hostPct}% of the ${limitGiB} GiB configured disk, sparse and not compacted automatically` : "allocated image size",
-      tone: hostPct >= 85 ? "state-warn" : "",
-      open: () => onOpenTab("runtimes"),
-      hint: "Open Machine",
-    },
-    {
-      key: "root",
-      label: "Guest root",
-      value: `${rootPct}%`,
-      sub: `${fmtSize(report?.root_used ?? 0)} of ${fmtSize(report?.root_total ?? 0)} used`,
-      tone: rootPct >= 85 ? "state-bad" : rootPct >= 75 ? "state-warn" : "",
-      open: () => onOpenTab("runtimes"),
-      hint: "Open Machine",
-    },
-    {
-      key: "docker",
-      label: "Docker on the VM disk",
-      value: fmtSize(report?.docker_dir ?? 0),
-      sub: "allocated blocks under /var/lib/docker",
-      tone: "",
-    },
-    {
-      key: "logical",
-      label: "Docker logical size",
-      value: fmtSize(logical),
-      sub: `images ${fmtSize(imageBytes)} · containers ${fmtSize(containerBytes)}`,
-      tone: "",
-      open: () => onOpenTab("images"),
-      hint: "Open Images",
-    },
-    {
-      key: "reclaim",
-      label: "Nothing needs it",
-      value: fmtSize(reclaimable),
-      sub: "unique bytes across the lists below",
-      tone: reclaimable > 0 ? "state-warn" : "",
-      open: jumpToUnused,
-      hint: "Jump to unused objects",
-    },
-  ];
-
-  type Candidate = {
-    key: string;
-    name: string;
-    kind: string;
-    size: number;
-    why: string;
-    /** How old the object is. Build cache has no creation time, only a last use. */
-    created?: { days: number | null; exact: string };
-    lastUsed?: string;
-    investigate?: () => void;
-    remove?: () => void;
-  };
   const candidates: Candidate[] = [
     ...dangling.map((i) => ({
       key: `img:${i.id}`,
+      kind: "image" as const,
+      safety: "safe" as const,
       name: `untagged ${shortId(i.id)}`,
-      kind: "Dangling image",
-      size: i.unique,
+      nameTitle: i.id,
       why: "No tag points at it",
-      created: { days: i.age_days, exact: i.created },
+      whyTitle: "The image has no tag; removing it frees its unique layers",
+      age: fmtAge(i.age_days),
+      ageTitle: i.created ? `Created ${i.created}` : undefined,
+      stale: i.age_days !== null && i.age_days >= STALE_DAYS,
+      freed: i.unique,
+      freedTitle: `${fmtSize(i.unique)} unique of ${fmtSize(i.size)}; layers another image shares stay on disk`,
       investigate: () => onInvestigate("image", shortId(i.id)),
       remove: () => onRemoveImage(i.id),
+      removeLabel: "Remove image?",
+      removeTitle: "The image has no tags; removing it frees its unique layers",
     })),
-    ...stopped.map((c) => ({
-      key: `ctr:${c.id}`,
-      name: c.name,
-      kind: "Stopped container",
-      size: c.size,
-      why: isKubernetesName(c.name) ? "Cluster-owned — the kubelet recreates it" : c.status || "not running",
-      created: { days: c.age_days, exact: c.created },
-      investigate: () => onInvestigate("container", shortId(c.id)),
-      remove: () => onRemoveContainer(shortId(c.id)),
+    ...unused.map((i) => ({
+      key: `img:${i.id}`,
+      kind: "image" as const,
+      safety: "review" as const,
+      name: i.tags[0] ?? shortId(i.id),
+      nameTitle: i.tags.length > 1 ? `${i.tags.join(", ")} · ${i.id}` : i.id,
+      why: "Nothing uses it",
+      whyTitle: "No container references this image; removing it deletes every tag",
+      age: fmtAge(i.age_days),
+      ageTitle: i.created ? `Created ${i.created}` : undefined,
+      stale: i.age_days !== null && i.age_days >= STALE_DAYS,
+      freed: i.unique,
+      freedTitle: `${fmtSize(i.unique)} unique of ${fmtSize(i.size)}; layers another image shares stay on disk`,
+      investigate: () => onInvestigate("image", shortId(i.id)),
+      remove: () => onRemoveImage(i.id),
+      removeLabel: i.tags.length > 1 ? "Remove all tags?" : "Remove image?",
+      removeTitle: `Removes every tag on this image${i.tags.length > 1 ? `: ${i.tags.join(", ")}` : ""}`,
     })),
+    ...stopped.map((c) => {
+      const k8s = isKubernetesName(c.name);
+      const exit = c.status.match(/Exited \((\d+)\)/)?.[1];
+      return {
+        key: `ctr:${c.id}`,
+        kind: "container" as const,
+        safety: (k8s ? "held" : "safe") as Safety,
+        name: c.name,
+        nameTitle: `${c.image || c.name} · ${c.id}`,
+        why: k8s ? "Cluster-owned" : exit ? `Exited ${exit}` : "Not running",
+        whyTitle: k8s ? "A kubelet controller creates this container again; its bytes are not a saving" : `${c.status || "Not running"}${exit === "137" ? " — 137 is SIGKILL, often the OOM killer" : exit === "143" ? " — 143 is SIGTERM, a requested stop" : ""}`,
+        age: fmtAge(c.age_days),
+        ageTitle: c.created ? `Created ${c.created}` : undefined,
+        stale: !k8s && c.age_days !== null && c.age_days >= STALE_DAYS,
+        freed: k8s ? 0 : c.size,
+        freedTitle: k8s
+          ? `${fmtSize(c.size)} on disk, but the cluster recreates this container`
+          : `${fmtSize(c.size)} on the VM disk`,
+        k8s,
+        investigate: () => onInvestigate("container", shortId(c.id)),
+        remove: () => onRemoveContainer(shortId(c.id)),
+        removeLabel: "Remove container?",
+        removeTitle: k8s ? "The cluster recreates containers it still needs" : `Remove ${c.name}`,
+      };
+    }),
     ...unusedVolumes.map((v) => ({
       key: `vol:${v.name}`,
+      kind: "volume" as const,
+      safety: "review" as const,
       name: v.name,
-      kind: "Unused volume",
-      size: v.size,
-      why: "No container mounts it",
-      created: { days: v.age_days, exact: v.created },
+      nameTitle: `${v.name} · ${v.mountpoint}`,
+      why: "Nothing mounts it",
+      whyTitle: `${v.mountpoint} — removing the volume deletes the files inside`,
+      age: fmtAge(v.age_days),
+      ageTitle: v.created ? `Created ${v.created}` : undefined,
+      stale: v.age_days !== null && v.age_days >= STALE_DAYS,
+      freed: v.size,
+      freedTitle: `${fmtSize(v.size)} of data. Docker cannot undo this.`,
+      data: true,
       investigate: () => onInvestigate("volume", v.name),
       remove: () => onRemoveVolume(v.name),
+      removeLabel: "Delete contents?",
+      removeTitle: `Remove ${v.name} and delete the files inside`,
     })),
     ...cache.map((entry, i) => ({
       key: `cache:${i}`,
-      name: entry.kind ? `${entry.kind} cache layer` : "Build cache layer",
-      kind: "Build cache",
-      size: entry.size,
-      why: entry.in_use ? "in use by a running build" : "not used by an active build",
-      lastUsed: entry.last_used,
-      remove: undefined,
+      kind: "cache" as const,
+      safety: (entry.in_use ? "held" : "safe") as Safety,
+      name: entry.kind ? `${entry.kind} cache` : "Build cache layer",
+      nameTitle: entry.kind || "Build cache",
+      why: entry.in_use ? "In use by a build" : "Idle builder cache",
+      whyTitle: entry.in_use ? "Held by a running build; prune skips it" : "Not used by an active build",
+      age: entry.last_used || "—",
+      ageTitle: "Build cache records its last use, not creation",
+      stale: false,
+      freed: entry.in_use ? 0 : entry.size,
+      freedTitle: entry.in_use ? `${fmtSize(entry.size)} held by a running build` : `${fmtSize(entry.size)} of builder cache`,
     })),
-  ].sort((a, b) => b.size - a.size);
+  ].sort((a, b) => b.freed - a.freed || a.name.localeCompare(b.name));
+
+  const safeRows = candidates.filter((c) => c.safety === "safe");
+  const reviewRows = candidates.filter((c) => c.safety === "review");
+  const heldRows = candidates.filter((c) => c.safety === "held");
+  const safeBytes = safeRows.reduce((n, c) => n + c.freed, 0);
+  const reviewBytes = reviewRows.reduce((n, c) => n + c.freed, 0);
+  const reclaimable = safeBytes + reviewBytes;
+  const reclaimBy = (kind: ObjectKind) => candidates.filter((c) => c.kind === kind).reduce((n, c) => n + c.freed, 0);
+
+  const kindCounts = (["image", "container", "volume", "cache"] as const)
+    .map((kind) => ({ kind, rows: candidates.filter((c) => c.kind === kind) }))
+    .filter((k) => k.rows.length > 0);
+  const activeKind: "all" | ObjectKind = kindCounts.some((k) => k.kind === kindFilter) ? kindFilter : "all";
+  const visibleKind = (c: Candidate) => activeKind === "all" || c.kind === activeKind;
+  const groups = [
+    { key: "safe" as const, title: "Safe to remove", note: "the prune defaults", rows: safeRows.filter(visibleKind) },
+    { key: "review" as const, title: "Review first", note: "data and tagged images", rows: reviewRows.filter(visibleKind) },
+    { key: "held" as const, title: "Held", note: "in use or cluster-owned", rows: heldRows.filter(visibleKind) },
+  ]
+    .map((g) => ({ ...g, bytes: g.rows.reduce((n, c) => n + c.freed, 0) }))
+    .filter((g) => g.rows.length > 0);
+  const visibleCount = groups.reduce((n, g) => n + g.rows.length, 0);
+  const visibleFreed = groups.reduce((n, g) => n + g.bytes, 0);
+
+  const imageReclaim = Math.min(imageBytes, reclaimBy("image"));
+  const containerReclaim = Math.min(containerBytes, reclaimBy("container"));
+  const volumeReclaim = Math.min(volumeBytes, reclaimBy("volume"));
+  const cacheReclaim = Math.min(cacheBytes, reclaimBy("cache"));
+  const reclaimPct = logical > 0 ? Math.round((reclaimable / logical) * 100) : 0;
+  const activeImages = images.filter((i) => i.containers > 0).length;
+  const attachedVolumes = (report?.volumes ?? []).filter((v) => v.links > 0).length;
+  const runningContainers = (report?.containers ?? []).filter((c) => c.running).length;
+  const inUseCache = cache.filter((c) => c.in_use).length;
+
+  const dockerTotal = report?.docker_disk_total ?? 0;
+  const dockerUsed = report?.docker_disk_used ?? 0;
+  const logTotal = logs.reduce((n, l) => n + l.size, 0);
+  // A 228 KB log is not a cleanup problem. Keep the panel for logs worth acting on;
+  // the rail's Details row still names the count and size.
+  const LOG_PANEL_MIN = 10 * 1024 * 1024;
+
+  const scanned = loading
+    ? "scanning…"
+    : readAt
+      ? `scanned ${new Date(readAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`
+      : "scanned";
+
+  const listSummary = candidates.length === 0
+    ? "No removal candidates."
+    : activeKind === "all"
+      ? `${candidates.length} object${candidates.length === 1 ? "" : "s"} · ${fmtSize(reclaimable)} can be freed${heldRows.length > 0 ? ` · ${heldRows.length} held` : ""} · grouped by risk`
+      : `${KIND_LABEL[activeKind]} · ${visibleCount} of ${candidates.length} · ${fmtSize(visibleFreed)} can be freed`;
+
+  const logPanel = logs.length > 0 && logTotal >= LOG_PANEL_MIN ? (
+    <section className="panel">
+      <div className="section-head">
+        <div>
+          <h3>Container logs</h3>
+          <p className="muted">
+            {logs.length} file{logs.length === 1 ? "" : "s"} · {fmtSize(logTotal)} written by Docker outside its own
+            totals. They grow without a limit unless the container sets <code>--log-opt max-size</code>.
+          </p>
+        </div>
+      </div>
+      <table className="table table-logs">
+        <colgroup>
+          <col className="col-log-container" />
+          <col className="col-log-size" />
+          <col className="col-log-path" />
+        </colgroup>
+        <thead><tr><th>Container</th><th>Size</th><th>File</th></tr></thead>
+        <tbody>
+          {logs.map((log) => (
+            <tr key={log.path}>
+              <td className="cleanup-name" title={log.container}><span className="cleanup-name-text">{log.container}</span></td>
+              <td className="cleanup-freed">{fmtSize(log.size)}</td>
+              <td className="cleanup-path" title={log.path}>{log.path}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  ) : null;
 
   if (loading && !report) {
     return (
       <div className="cleanup-page">
-        <section className="panel" aria-busy="true">
-          <div className="section-head">
-            <div>
-              <h3>Where the storage goes</h3>
-              <p className="muted">
-                Scanning <code>system df -v</code>, the VM's Docker directory and this profile's disk image.
-              </p>
+        <div className="cleanup-b-workspace">
+          <aside className="panel cleanup-b-rail" aria-hidden="true">
+            <span className="cleanup-skeleton skeleton-label" />
+            <span className="cleanup-skeleton" style={{ width: 148, height: 30, marginTop: 6 }} />
+            <span className="cleanup-skeleton skeleton-sub" style={{ marginTop: 8 }} />
+            <div className="cleanup-skeleton-split">
+              <span className="cleanup-skeleton skeleton-label" />
+              <span className="cleanup-skeleton skeleton-label" />
             </div>
-            <span className="icon-plain" role="status" aria-label="Scanning storage" title="Scanning storage">
-              <RefreshIcon spinning />
-            </span>
-          </div>
-          <StorageSkeleton />
-        </section>
-        <section className="panel" aria-hidden="true">
-          <div className="section-head"><h3>Unused objects</h3></div>
-          <SkeletonRows rows={3} />
-        </section>
-        <section className="panel" aria-hidden="true">
-          <div className="section-head"><h3>Unused images</h3></div>
-          <SkeletonRows rows={2} />
-        </section>
+            <div className="cleanup-bar-skeleton"><span className="cleanup-skeleton" style={{ width: "62%" }} /></div>
+          </aside>
+          <section className="panel cleanup-b-listpane" aria-busy="true">
+            <div className="section-head">
+              <div><h3>Unused objects</h3><p className="muted">Scanning <code>system df -v</code> and the guest disk.</p></div>
+              <span className="icon-plain" role="status" aria-label="Scanning storage" title="Scanning storage"><RefreshIcon spinning /></span>
+            </div>
+            <SkeletonRows rows={7} />
+          </section>
+        </div>
       </div>
     );
   }
@@ -274,209 +389,179 @@ export function CleanupPage({ report, loading, busy, profile, running, diskLimit
     );
   }
 
-  return (
-    <div className="cleanup-page">
-      <section className="panel" aria-busy={loading}>
-        <div className="section-head">
-          <div>
-            <h3>Where the storage goes</h3>
-            <p className="muted">
-              Read through <code>{report?.client ?? "the profile's client"}</code> for <code>{profile}</code>, next to what the VM's disk image costs on this Mac.
-            </p>
-          </div>
-        </div>
-
-        {report?.error && <p className="muted">Docker storage could not be read: {report.error}</p>}
-
-        {report && (
-          <>
-            <div className="strip-items cleanup-strip">
-              {metrics.map((m) => {
-                const body = (
-                  <>
-                    <span className="strip-label">{m.label}</span>
-                    <span className={`strip-value${m.tone ? ` ${m.tone}` : ""}`}>{m.value}</span>
-                    <span className="strip-sub">{m.sub}</span>
-                  </>
-                );
-                return m.open ? (
-                  <button key={m.key} className="strip-item cleanup-metric" onClick={m.open} title={m.hint}>
-                    {body}
-                  </button>
-                ) : (
-                  <div key={m.key} className="strip-item">{body}</div>
-                );
-              })}
-            </div>
-
-            {logical > 0 && (
-              <>
-                <div className="cleanup-bar" role="img" aria-label="Docker storage by kind">
-                  {segments.map((s) => (
-                    <span key={s.key} className="cleanup-bar-seg" style={{ width: `${(s.value / logical) * 100}%`, background: s.color }} />
-                  ))}
-                </div>
-                <div className="cleanup-legend">
-                  {segments.map((s) => (
-                    <Legend key={s.key} label={s.label} value={s.value} color={s.color} onOpen={s.open} />
-                  ))}
-                  {/* Two numbers, two methods: naming the difference stops them reading as a bug. */}
-                  <span className="cleanup-legend-item muted" title="Docker's own estimate counts shared layers that survive as long as another image uses them; the figure above sums only unique bytes.">
-                    Docker's own estimate {fmtSize(totals?.reclaimable ?? 0)} — it counts shared layers too
-                  </span>
-                </div>
-              </>
-            )}
-            <p className="strip-note">
-              Logical sizes come from <code>docker system df</code> and count shared layers per image; the
-              allocated number is <code>du</code> inside the VM. The disk image on the Mac is one sparse file, so
-              removing data gives space back to Docker but not always to macOS.
-            </p>
-          </>
-        )}
-      </section>
-
-      <section className="panel cleanup-jump-target" ref={unusedRef} tabIndex={-1}>
-        <div className="section-head">
-          <div>
-            <h3>Unused objects</h3>
-            <p className="muted">
-              {candidates.length === 0
-                ? "Nothing unused: every image, container and volume is referenced."
-                : `${candidates.length} unused object${candidates.length === 1 ? "" : "s"}, up to ${fmtSize(reclaimable)} of unique data.`}
-            </p>
-          </div>
-          <button className="btn ghost" disabled={busy} onClick={onPrune}>Prune…</button>
-        </div>
-        {candidates.length > 0 ? (
-          <table className="table cleanup-table">
-            <thead>
-              <tr>
-                <th>Object</th><th>Kind</th><th>Why it can go</th>
-                <th title="Days since creation; build cache rows show when the layer was last used">Age</th>
-                <th>Size</th><th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {candidates.map((c) => (
-                <tr key={c.key}>
-                  <td className="cleanup-name" title={c.name}>{isKubernetesName(c.name) && <span className="k8s-chip" title="Created by the profile's Kubernetes cluster; its controller recreates it">k8s</span>}{c.name}</td>
-                  <td className="muted">{c.kind}</td>
-                  <td className="muted cleanup-why" title={c.why}>{c.why}</td>
-                  <td className="cleanup-age" title={c.created?.exact ? `Created ${c.created.exact}` : undefined}>
-                    {c.created ? fmtAge(c.created.days) : c.lastUsed ?? "—"}
-                  </td>
-                  <td className="cleanup-size">{fmtSize(c.size)}</td>
-                  <td>
-                    <div className="actions">
-                      {c.investigate && (
-                        <button className="icon-btn" title="Investigate" aria-label={`Investigate ${c.name}`} onClick={c.investigate}>
-                          <FingerprintIcon />
-                        </button>
-                      )}
-                      {c.remove ? (
-                        <ConfirmButton
-                          label={`Remove ${c.name}`}
-                          icon={<TrashIcon size={14} />}
-                          title={`Remove ${c.name}`}
-                          disabled={busy}
-                          onConfirm={c.remove}
-                        />
-                      ) : (
-                        <button className="icon-btn" disabled={busy} onClick={onPrune} aria-label="Clear build cache" title="Build cache is cleared by the prune dialog"><BroomIcon size={14} /></button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="cleanup-empty">
-            Dangling images, stopped containers, unused volumes and build cache all come through here
-            when they appear. Images a container still references stay out of the list.
-          </p>
-        )}
-      </section>
-
+  // The scan answered nothing (the invoke failed): "nothing unused" has not been earned.
+  if (!report) {
+    return (
       <section className="panel">
-        <div className="section-head">
-          <div>
-            <h3>Unused images</h3>
-            <p className="muted">
-              {unused.length === 0
-                ? "Every tagged image is used by a container."
-                : `${unused.length} tagged image${unused.length === 1 ? "" : "s"} no container references${staleCount ? ` · ${staleCount} older than ${STALE_DAYS} days` : ""}.`}
-            </p>
-          </div>
-        </div>
-        {unused.length > 0 ? (
-          <table className="table cleanup-table">
-            <thead>
-              <tr><th>Image</th><th>Tags</th><th>Age</th><th>Size</th><th>Unique</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {unused.map((i) => {
-                const stale = i.age_days !== null && i.age_days >= STALE_DAYS;
-                return (
-                  <tr key={i.id}>
-                    <td className="cleanup-name" title={i.id}>{shortId(i.id)}</td>
-                    <td className="cleanup-tags">{i.tags.join(", ")}</td>
-                    <td>
-                      <span className={stale ? "cleanup-age stale" : "cleanup-age"}>{fmtAge(i.age_days)}</span>
-                      {stale && <span className="cleanup-badge">stale</span>}
-                    </td>
-                    <td className="cleanup-size">{fmtSize(i.size)}</td>
-                    <td className="cleanup-size">{fmtSize(i.unique)}</td>
-                    <td>
-                      <div className="actions">
-                        <button className="icon-btn" title="Investigate" aria-label={`Investigate image ${shortId(i.id)}`} onClick={() => onInvestigate("image", shortId(i.id))}>
-                          <FingerprintIcon />
-                        </button>
-                        <ConfirmButton
-                          label="Remove image"
-                          icon={<TrashIcon size={14} />}
-                          title={`Remove image ${shortId(i.id)}`}
-                          disabled={busy}
-                          onConfirm={() => onRemoveImage(i.id)}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <p className="cleanup-empty">Images with a tag stay listed here once no container uses them.</p>
-        )}
+        <h3>Cleanup</h3>
+        <p className="muted">The storage scan for <code>{profile}</code> did not answer. Nothing is shown rather than zeroes that were never read.</p>
+        <button className="btn ghost" onClick={onRescan}><RefreshIcon /> Rescan</button>
       </section>
+    );
+  }
 
-      {logs.length > 0 && (
+  // `system df -v` failed. The Docker data disk was still measured; its numbers were not,
+  // so they are omitted instead of printed as zero.
+  if (report.error) {
+    return (
+      <div className="cleanup-page">
         <section className="panel">
           <div className="section-head">
             <div>
-              <h3>Largest container logs</h3>
-              <p className="muted">
-                Written by Docker outside its own totals. They grow without a limit unless the container sets
-                <code> --log-opt max-size</code>.
-              </p>
+              <h3>Cleanup</h3>
+              <p className="muted">Read for <code>{profile}</code>; the object lists wait for Docker.</p>
             </div>
+            <button className="btn ghost" disabled={loading} onClick={onRescan}><RefreshIcon spinning={loading} /> {loading ? "Scanning…" : "Rescan"}</button>
           </div>
-          <table className="table cleanup-table">
-            <thead><tr><th>Container</th><th>Size</th><th>File</th></tr></thead>
-            <tbody>
-              {logs.map((log) => (
-                <tr key={log.path}>
-                  <td className="cleanup-name">{log.container}</td>
-                  <td className="cleanup-size">{fmtSize(log.size)}</td>
-                  <td className="cleanup-path" title={log.path}>{log.path}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <p className="cleanup-error" role="alert">Docker's storage could not be read: {report.error}</p>
+          <DiskMeter used={dockerUsed} total={dockerTotal} />
+          <p className="cleanup-b-list-note">Docker's sizes and the object list stay hidden rather than showing zeroes that were never read. The data disk above was measured.</p>
         </section>
-      )}
+        {logPanel}
+      </div>
+    );
+  }
+
+  return (
+    <div className="cleanup-page">
+      <div className="cleanup-b-workspace">
+        <aside className="panel cleanup-b-rail">
+          <span className="cleanup-b-rail-label">Can be freed</span>
+          <span className={`cleanup-b-rail-value ${reclaimable > 0 ? "state-warn" : "state-ok"}`}>{fmtSize(reclaimable)}</span>
+          <span className="cleanup-b-rail-sub">
+            {candidates.length === 0
+              ? "Nothing unused: every image, container and volume is referenced."
+              : `${reclaimPct}% of Docker's ${fmtSize(logical)} · ${candidates.length} object${candidates.length === 1 ? "" : "s"}${heldRows.length > 0 ? ` · ${heldRows.length} held` : ""}`}
+          </span>
+          {reclaimable > 0 && (
+            <div className="cleanup-b-rail-split">
+              <div>
+                <span className="cleanup-b-rail-split-label">Safe now</span>
+                <span className="cleanup-b-rail-split-value">{fmtSize(safeBytes)}</span>
+              </div>
+              <div className="review">
+                <span className="cleanup-b-rail-split-label">Review first</span>
+                <span className="cleanup-b-rail-split-value">{fmtSize(reviewBytes)}</span>
+              </div>
+            </div>
+          )}
+          <div className="cleanup-b-rail-actions">
+            <button className="btn primary" disabled={busy || candidates.length === 0} onClick={onPrune} title="Review every category in the prune dialog">
+              <BroomIcon size={14} />
+              {candidates.length === 0 ? "Nothing to prune" : `Review & prune ${fmtSize(reclaimable)}…`}
+            </button>
+          </div>
+          {candidates.length > 0 && (
+            <p className="cleanup-b-rail-foot">Safe is the prune defaults. Review is data and tagged images you may still want.</p>
+          )}
+          <DiskMeter used={dockerUsed} total={dockerTotal} />
+          <div className="cleanup-cats">
+            <div className="cleanup-cat"><span>Images</span><b>{fmtSize(imageBytes)}</b><em>{fmtSize(imageReclaim)} can be freed · {activeImages} active</em></div>
+            <div className="cleanup-cat"><span>Volumes</span><b>{fmtSize(volumeBytes)}</b><em>{fmtSize(volumeReclaim)} can be freed · {attachedVolumes === 0 ? "none attached" : `${attachedVolumes} attached`}</em></div>
+            <div className="cleanup-cat"><span>Containers</span><b>{fmtSize(containerBytes)}</b><em>{fmtSize(containerReclaim)} can be freed · {runningContainers} running</em></div>
+            <div className="cleanup-cat"><span>Build cache</span><b>{cacheBytes > 0 ? fmtSize(cacheBytes) : "—"}</b><em>{cacheBytes > 0 ? `${fmtSize(cacheReclaim)} can be freed · ${inUseCache} in use` : "nothing cached"}</em></div>
+          </div>
+          <details className="cleanup-b-rail-details">
+            <summary>Details</summary>
+            <div className="cleanup-detail-row"><span>Client</span><b>{report.client || "—"}</b></div>
+            <div className="cleanup-detail-row"><span>Docker's estimate</span><b>{fmtSize(totals?.reclaimable ?? 0)}</b></div>
+            <div className="cleanup-detail-row"><span>Container logs</span><b>{logs.length > 0 ? `${fmtSize(logTotal)} · ${logs.length} files` : "none"}</b></div>
+            <p className="cleanup-detail-note">Docker's accounting counts shared layers once per image. Frees sums only bytes that stay freed.</p>
+          </details>
+        </aside>
+
+        <section className="panel cleanup-b-listpane">
+          <div className="cleanup-b-list-head">
+            <div><h3>Unused objects</h3><p className="muted">{listSummary}</p></div>
+            <div className="cleanup-b-list-meta">{scanned} · <button className="cleanup-b-rescan" disabled={loading} onClick={onRescan} title="Re-read the storage report">Rescan</button></div>
+          </div>
+
+          {kindCounts.length > 1 && (
+            <div className="chips cleanup-kinds" role="group" aria-label="Filter unused objects by kind">
+              <button className={`chip${activeKind === "all" ? " active" : ""}`} aria-pressed={activeKind === "all"} onClick={() => setKindFilter("all")}>
+                All <span className="chip-count">{candidates.length}</span>
+              </button>
+              {kindCounts.map((k) => (
+                <button
+                  key={k.kind}
+                  className={`chip${activeKind === k.kind ? " active" : ""}`}
+                  aria-pressed={activeKind === k.kind}
+                  title={`${fmtSize(k.rows.reduce((n, c) => n + c.freed, 0))} can be freed`}
+                  onClick={() => setKindFilter(k.kind)}
+                >
+                  {KIND_LABEL[k.kind]} <span className="chip-count">{k.rows.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {groups.length > 0 ? (
+            <div className="cleanup-b-listscroll">
+              <table className="table table-cleanup-b">
+                <colgroup>
+                  <col className="col-object" />
+                  <col className="col-age" />
+                  <col className="col-frees" />
+                  <col className="col-actions" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Object</th>
+                    <th title="Creation age; build cache rows show when the layer was last used">Age</th>
+                    <th title="Bytes the removal frees for good; rows sort by it inside a group">Frees <span className="cleanup-sort">↓</span></th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((g) => {
+                    const preview = g.key === "safe" ? SAFE_PREVIEW : GROUP_PREVIEW;
+                    const open = !!expanded[g.key];
+                    const shown = open ? g.rows : g.rows.slice(0, preview);
+                    const hidden = g.rows.length - shown.length;
+                    const hiddenBytes = g.bytes - shown.reduce((n, c) => n + c.freed, 0);
+                    return (
+                      <Fragment key={g.key}>
+                        <tr className="cleanup-b-group">
+                          <td colSpan={4}>
+                            <div className="cleanup-b-groupline">
+                              <span className="cleanup-b-title">{g.title}</span>
+                              <span className="cleanup-b-count">{g.rows.length} object{g.rows.length === 1 ? "" : "s"}</span>
+                              <span className="cleanup-b-note">{g.note}</span>
+                              <span className={`cleanup-b-bytes${g.key === "review" ? " review" : g.key === "held" ? " muted" : ""}`}>
+                                {g.key === "held" ? "frees nothing" : fmtSize(g.bytes)}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                        {shown.map((c) => <CandidateRow key={c.key} c={c} busy={busy} />)}
+                        {(hidden > 0 || (open && g.rows.length > preview)) && (
+                          <tr className="cleanup-more-row">
+                            <td colSpan={4}>
+                              <button className="cleanup-more" onClick={() => setExpanded((prev) => ({ ...prev, [g.key]: !open }))}>
+                                {open ? "Show fewer" : `Show ${hidden} more${hiddenBytes > 0 ? ` · ${fmtSize(hiddenBytes)}` : ""}`}
+                              </button>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="cleanup-b-list-note">Frees = bytes that stay freed · rows sort by it inside each group.</p>
+            </div>
+          ) : candidates.length === 0 ? (
+            <p className="cleanup-empty">
+              Dangling or unused images, stopped containers, unused volumes and build cache all come through here
+              when they appear. Images a container still references stay out of the list.
+            </p>
+          ) : (
+            <p className="cleanup-empty">Nothing in this kind is unused any more. Pick All to see the rest.</p>
+          )}
+        </section>
+      </div>
+
+      {logPanel}
     </div>
   );
 }

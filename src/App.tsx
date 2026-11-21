@@ -1811,14 +1811,13 @@ function App() {
   const running = profiles.filter((p) => p.status.toLowerCase() === "running");
   const selectedRunning = profiles.find((p) => p.name === selected)?.status.toLowerCase() === "running";
   useEffect(() => {
-    // A menu-bar label is not worth a notice: if the item is missing the window still works.
-    void invoke("tray_sync_cmd", {
-      profile: profiles.length === 0 ? "No profile" : selected,
-      running: selectedRunning,
-      available: profiles.length > 0,
-    }).catch(() => {});
+  // A menu-bar label is not worth a notice: if the item is missing the window still works.
+  void invoke("tray_sync_cmd", {
+    profile: profiles.length === 0 ? "No profile" : selected,
+    running: selectedRunning,
+    available: profiles.length > 0,
+  }).catch(() => {});
   }, [selected, selectedRunning, profiles.length]);
-  const diskLimitBytes = profiles.find((p) => p.name === selected)?.disk ?? 0;
   // Volume sizes need one `system df -v` scan; only pay for it while the list is open, or on
   // Sherlock's project page where a project's footprint is the point.
   const wantVolSizes = tab === "volumes" || (tab === "sherlock" && subject?.kind === "group");
@@ -2455,9 +2454,9 @@ function App() {
               busy={busy}
               profile={selected}
               running={selectedRunning}
-              diskLimitBytes={diskLimitBytes}
-              onOpenTab={(target) => go({ tab: target })}
+              readAt={cleanupCache?.profile === selected ? cleanupCache.at : null}
               onPrune={() => setShowPrune(true)}
+              onRescan={() => setCleanupNonce((n) => n + 1)}
               onRemoveImage={(id) => act(() => invoke("image_remove_cmd", { id }), "Image removed")}
               onRemoveVolume={(name) => act(() => invoke("volume_remove_cmd", { name }), "Volume removed")}
               onRemoveContainer={(id) => act(() => invoke("container_action_cmd", { id, action: "remove" }), "Container removed")}

@@ -754,6 +754,15 @@ pre, pre *, code, input, textarea, .table td, .kv, .logs {
 .table-networks col.col-subnet { width: 220px; }
 .table-networks col.col-actions { width: 96px; }
 
+/* Cleanup B: one list, so the object name takes the slack. Age pays for the word
+   "stale" after "81 days"; actions pay for the 30px investigate + bin pair and the
+   last cell's 12px padding (66 + 24 = 90, rounded to 96). */
+.table-cleanup-b col.col-age { width: 116px; }
+.table-cleanup-b col.col-frees { width: 92px; }
+.table-cleanup-b col.col-actions { width: 96px; }
+.table-logs col.col-log-size { width: 96px; }
+.table-logs col.col-log-path { width: 38%; }
+
 /* Podman lists reuse the Docker column schema. Two differences: every row carries
    a tag button Docker puts behind the Investigator, and Podman has a machines
    table of its own. Actions columns are sized from the real button count
@@ -1981,24 +1990,88 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 /* A page of panels rather than one table: each panel answers one storage question. */
 .cleanup-page { display: flex; flex-direction: column; gap: 12px; padding: 0 20px 14px; }
 .cleanup-page .panel { margin: 0; }
-.cleanup-page .strip-note { margin-top: 12px; }
-.cleanup-strip { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); padding-top: 14px; }
-.cleanup-bar { display: flex; height: 10px; margin-top: 16px; border-radius: 5px; overflow: hidden; background: var(--panel-2); }
-.cleanup-bar-seg { height: 100%; }
+.cleanup-scanned { flex: none; font-size: 11px; color: var(--muted); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; white-space: nowrap; }
+.cleanup-error { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--amber-text) 12%, transparent); color: var(--amber-text); font-size: 12.5px; line-height: 1.5; }
+
+/* Cleanup, top panel: the answer on the left, the anatomy on the right. The two
+   columns answer different questions and split at the same breakpoint the strip did. */
+.cleanup-top { display: grid; grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.25fr); gap: 28px; align-items: start; }
+@media (max-width: 1100px) { .cleanup-top { grid-template-columns: minmax(0, 1fr); gap: 20px; } }
+.cleanup-answer { display: flex; flex-direction: column; min-width: 0; }
+.cleanup-answer-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.cleanup-answer-value { margin-top: 2px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 38px; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.cleanup-answer-value.state-warn { color: var(--amber-text); }
+.cleanup-answer-value.state-ok { color: var(--green-text); }
+.cleanup-answer-sub { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+/* Safe and review are facts, not cards: a hairline, two columns, no fill. */
+.cleanup-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.cleanup-split-label { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.cleanup-split-value { display: block; margin-top: 1px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 20px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.cleanup-split-item.review .cleanup-split-value { color: var(--amber-text); }
+.cleanup-split-sub { display: block; margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.cleanup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.cleanup-answer-foot { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+/* The anatomy is four facts on their own denominators, each bar normalised to its row. */
+.cleanup-anatomy { display: flex; flex-direction: column; gap: 15px; min-width: 0; padding-top: 2px; }
+.cleanup-anatomy-row { min-width: 0; }
+.cleanup-anatomy-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cleanup-anatomy-label { font-size: 12px; font-weight: 600; }
+.cleanup-anatomy-value { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cleanup-anatomy-value.tone-warn { color: var(--amber-text); }
+.cleanup-anatomy-value.tone-bad { color: var(--red-text); }
+.cleanup-meter { height: 6px; margin-top: 6px; border-radius: 3px; overflow: hidden; background: var(--panel-2); box-shadow: inset 0 0 0 0.5px var(--sep); }
+.cleanup-meter > span { display: block; height: 100%; border-radius: 3px; background: color-mix(in srgb, var(--text) 55%, transparent); }
+.cleanup-meter > span.tone-warn { background: color-mix(in srgb, var(--amber-text) 70%, transparent); }
+.cleanup-meter > span.tone-bad { background: color-mix(in srgb, var(--red-text) 70%, transparent); }
+.cleanup-anatomy-sub { margin-top: 5px; font-size: 11px; line-height: 1.45; color: var(--muted); }
+
+.cleanup-composition { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--sep); }
+.cleanup-comp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cleanup-comp-title { font-size: 12px; font-weight: 600; }
+.cleanup-comp-value { margin-left: 6px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cleanup-comp-note { font-size: 11px; color: var(--muted); }
+.cleanup-callout { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; margin-top: 12px; padding: 9px 11px; border: none; border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background var(--dur) var(--ease); }
+.cleanup-callout:hover { background: var(--hover); }
+.cleanup-callout:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.cleanup-callout-main { font-size: 12.5px; }
+.cleanup-callout-main strong { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-weight: 600; }
+.cleanup-callout-side { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.cleanup-note { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--sep); font-size: 12px; line-height: 1.5; color: var(--muted); }
+
+.cleanup-bar { display: flex; height: 10px; margin-top: 12px; border-radius: 5px; overflow: hidden; background: var(--panel-2); }
+.cleanup-bar-seg { height: 100%; position: relative; overflow: hidden; }
 .cleanup-bar-seg + .cleanup-bar-seg { box-shadow: inset 1px 0 0 var(--panel); }
+/* The tail of every band is the part nothing needs: the same ink, striped away. */
+.cleanup-bar-free { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(135deg, var(--panel) 0 2px, transparent 2px 6px); }
 .cleanup-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-top: 8px; font-size: 12px; color: var(--muted); }
 .cleanup-legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .cleanup-legend-item strong { color: var(--text); font-weight: 600; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; }
+.cleanup-legend-free { color: var(--amber-text); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
 .cleanup-dot { width: 7px; height: 7px; border-radius: 2px; }
-.cleanup-table th:nth-last-child(2) { width: 90px; }
-.cleanup-name { font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-.cleanup-why { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.cleanup-size { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
-.cleanup-tags { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.cleanup-kinds { margin: 2px 0 10px; }
+/* One group header per risk band: title and bytes on one line, the rule under it. */
+.cleanup-group-row:hover td { background: var(--bg-secondary); }
+.cleanup-group-cell { background: var(--bg-secondary); padding-top: 9px; padding-bottom: 9px; white-space: normal; overflow: visible; }
+.cleanup-page .table-cleanup td.cleanup-group-cell { padding-right: 12px; }
+.cleanup-group-line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cleanup-group-title { font-size: 12px; font-weight: 600; }
+.cleanup-group-count { margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--muted); }
+.cleanup-group-bytes { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cleanup-group-bytes.review { color: var(--amber-text); }
+.cleanup-group-note { margin-top: 2px; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.cleanup-name { font-weight: 600; }
+.cleanup-name-main { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cleanup-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cleanup-name-sub { display: block; margin-top: 1px; font-size: 11px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cleanup-data { flex: none; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--amber-text) 14%, transparent); color: var(--amber-text); font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 15px; }
+.cleanup-why { overflow: hidden; text-overflow: ellipsis; }
+.cleanup-freed { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.cleanup-freed.zero { color: var(--muted); }
 .cleanup-age { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
 .cleanup-age.stale { color: var(--amber-text); font-weight: 600; }
-.cleanup-badge { margin-left: 8px; padding: 1px 7px; border-radius: 9px; background: color-mix(in srgb, var(--amber-text) 14%, transparent); color: var(--amber-text); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
-.cleanup-path { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+.cleanup-badge { margin-left: 6px; padding: 1px 5px; border-radius: 9px; background: color-mix(in srgb, var(--amber-text) 14%, transparent); color: var(--amber-text); font-size: 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.cleanup-path { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .cleanup-empty { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .cleanup-skeleton { display: block; flex: none; height: 10px; border-radius: 5px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--sep); position: relative; overflow: hidden; }
 .cleanup-skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 22%, var(--hover) 50%, transparent 78%); background-size: 220% 100%; animation: ghost-sheen 1.5s ease-in-out infinite; }
@@ -2011,13 +2084,8 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 .cleanup-skeleton-row { display: flex; align-items: center; gap: 18px; min-height: 41px; box-shadow: inset 0 -1px 0 var(--sep); }
 .cleanup-skeleton-row:last-child { box-shadow: none; }
 
-/* Metric cells and legend entries are quiet controls: they gain a surface on hover and
-   carry a focus ring, never a permanent fill. */
-.cleanup-strip .strip-item { margin: 0 -6px; padding: 6px; border-radius: 8px; min-width: 0; }
-.cleanup-metric { border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background var(--dur) var(--ease); }
-.cleanup-metric:hover { background: var(--panel-2); }
-.cleanup-metric:active { background: var(--hover); }
-.cleanup-metric:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Legend entries are quiet controls: they gain a surface on hover and carry a
+   focus ring, never a permanent fill. */
 .cleanup-legend-link { border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 6px; margin: -2px -6px; border-radius: 6px; min-height: 24px; cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .cleanup-legend-link:hover { background: var(--panel-2); color: var(--text); }
 .cleanup-legend-link:active { background: var(--hover); }
@@ -2025,6 +2093,76 @@ html.widget-drag .span-btn { opacity: 0.65; transition: none; }
 /* A jump target is focused programmatically, so the ring marks where the eye should land. */
 .cleanup-jump-target { scroll-margin-top: 8px; }
 .cleanup-jump-target:focus { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+/* --- Cleanup B: the decision rail and the working list --- */
+/* The page fills the window: the rail declares the answer and the list owns the
+   remaining height and scrolls, so sixty rows never push the answer away. */
+.page-scroll.scroll > .cleanup-page { flex: 1 1 auto; min-height: 0; }
+.cleanup-b-workspace { display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 12px; flex: 1 1 auto; min-height: 560px; }
+@media (max-width: 1100px) {
+  .cleanup-b-workspace { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .cleanup-b-listpane { min-height: 520px; }
+}
+.cleanup-b-rail { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.cleanup-b-rail-label { color: var(--muted); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.cleanup-b-rail-value { margin-top: 2px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 30px; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.cleanup-b-rail-value.state-warn { color: var(--amber-text); }
+.cleanup-b-rail-value.state-ok { color: var(--green-text); }
+.cleanup-b-rail-sub { margin-top: 2px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.cleanup-b-rail-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.cleanup-b-rail-split-label { display: block; color: var(--muted); font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.cleanup-b-rail-split-value { display: block; margin-top: 1px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cleanup-b-rail-split .review .cleanup-b-rail-split-value { color: var(--amber-text); }
+.cleanup-b-rail-actions { display: flex; margin-top: 14px; }
+.cleanup-b-rail-actions .btn { width: 100%; justify-content: center; }
+.cleanup-b-rail-foot { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.cleanup-disk { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.cleanup-disk-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11.5px; }
+.cleanup-disk-line b { color: var(--text); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; font-weight: 600; }
+.cleanup-disk-sub { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.cleanup-meter > span.warn { background: color-mix(in srgb, var(--amber-text) 70%, transparent); }
+.cleanup-meter > span.bad { background: color-mix(in srgb, var(--red-text) 70%, transparent); }
+.cleanup-cats { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.cleanup-cat { display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; align-items: baseline; }
+.cleanup-cat span { font-size: 12px; }
+.cleanup-cat b { font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.cleanup-cat em { grid-column: 1 / -1; color: var(--muted); font-size: 10.5px; font-style: normal; }
+.cleanup-b-rail-details { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--sep); color: var(--muted); font-size: 11.5px; }
+.cleanup-b-rail-details summary { cursor: pointer; color: var(--muted); font-weight: 500; list-style: none; }
+.cleanup-b-rail-details summary::-webkit-details-marker { display: none; }
+.cleanup-b-rail-details summary::before { content: "›"; display: inline-block; width: 12px; }
+.cleanup-b-rail-details[open] summary::before { content: "⌄"; }
+.cleanup-detail-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 11px; }
+.cleanup-detail-row b { color: var(--text); font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cleanup-detail-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.cleanup-b-listpane { display: flex; flex-direction: column; min-height: 0; }
+.cleanup-b-list-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.cleanup-b-list-meta { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; white-space: nowrap; }
+.cleanup-b-rescan { border: 0; background: none; padding: 2px 4px; margin: -2px -4px; border-radius: 4px; color: var(--muted); font: inherit; cursor: pointer; }
+.cleanup-b-rescan:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.cleanup-b-rescan:disabled { opacity: 0.45; cursor: default; }
+.cleanup-b-listscroll { flex: 1; min-height: 0; overflow: auto; }
+.cleanup-b-listscroll thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); }
+.cleanup-b-list-note { margin: 8px 0 0; padding-top: 9px; box-shadow: inset 0 0.5px 0 var(--sep); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.cleanup-b-group td { background: var(--bg-secondary); padding: 9px 12px; white-space: normal; overflow: visible; }
+.cleanup-page .cleanup-b-listpane .cleanup-b-group td { padding-left: 12px; padding-right: 12px; }
+.cleanup-b-group:hover td { background: var(--bg-secondary); }
+.cleanup-b-groupline { display: flex; align-items: baseline; gap: 8px; }
+.cleanup-b-title { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.cleanup-b-count { color: var(--muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.cleanup-b-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.cleanup-b-bytes { margin-left: auto; font-family: ui-monospace, "SF Mono", "JetBrains Mono", monospace; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cleanup-b-bytes.review { color: var(--amber-text); }
+.cleanup-b-bytes.muted { color: var(--muted); }
+.cleanup-more-row td { padding: 6px 12px; }
+.cleanup-page .cleanup-b-listpane .cleanup-more-row td { padding-left: 12px; padding-right: 12px; }
+.cleanup-more { border: 0; background: none; padding: 4px 6px; margin: -4px -6px; border-radius: 4px; min-height: 24px; color: var(--muted); font: 11.5px var(--sans); cursor: pointer; }
+.cleanup-more:hover { background: var(--panel-2); color: var(--text); }
+.cleanup-stale { margin-left: 5px; color: var(--amber-text); font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; }
+.cleanup-sort { margin-left: 3px; color: var(--muted); font-size: 9.5px; }
+.table-cleanup-b .cleanup-age, .table-cleanup-b th:nth-child(2) { text-align: right; }
+.table-cleanup-b .cleanup-freed, .table-cleanup-b th:nth-child(3) { text-align: right; }
+.cleanup-skeleton-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
 
 /* Podman page: one padded column so the topbar and tables share the same left
    edge. The list table drops the global 24px side margin because this page

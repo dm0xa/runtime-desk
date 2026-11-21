@@ -174,11 +174,35 @@ def stub_js(state: str) -> str:
     containers = cfg["containers"]
     report = {"containers": [{"id": c["id"], "name": c["name"], "running": c["state"] == "running",
                              "size": 4096, "status": c["status"], "created": c["created_at"], "age_days": 3}
-                            for c in containers[:2]],
-              "images": [{"id": "sha256:aaaa", "repository": "nginx", "tag": "1", "size": 1000, "unique": 400,
-                          "dangling": False, "containers": 1, "created": "2 days ago", "age_days": 2}],
-              "volumes": [], "build_cache": [], "log_files": [], "host_disk": 1, "root_total": 1, "root_used": 0,
-              "totals": {"images": 1000, "containers": 8192, "volumes": 0, "build_cache": 0}}
+                            for c in containers[:2]]
+                           + [{"id": "stopped0", "name": "old-worker", "running": False, "size": 4096,
+                               "status": "Exited (137) 20 days ago", "created": "2026-10-01T10:00:00Z",
+                               "age_days": 20}],
+              # The unused list has to render every kind in the layout gate: a used image,
+              # a dangling one, an unused tagged one, a stopped container, a volume, cache.
+              "images": [{"id": "sha256:" + "a" * 64, "tags": ["nginx:1"], "size": 400_000_000,
+                          "unique": 150_000_000, "containers": 1, "created": "2026-11-14T10:00:00Z",
+                          "age_days": 2, "dangling": False},
+                         {"id": "sha256:" + "b" * 64, "tags": [], "size": 300_000_000,
+                          "unique": 120_000_000, "containers": 0, "created": "2026-09-01T10:00:00Z",
+                          "age_days": 45, "dangling": True},
+                         {"id": "sha256:" + "c" * 64, "tags": ["redis:7"], "size": 110_000_000,
+                          "unique": 60_000_000, "containers": 0, "created": "2026-11-01T10:00:00Z",
+                          "age_days": 10, "dangling": False}],
+              "volumes": [{"name": "old-logs", "driver": "local",
+                           "mountpoint": "/var/lib/docker/volumes/old-logs/_data", "size": 50_000_000,
+                           "links": 0, "created": "2026-10-01T10:00:00Z", "age_days": 40}],
+              "build_cache": [{"size": 20_000_000, "kind": "regular", "last_used": "3 days ago",
+                               "in_use": False}],
+              "client": "docker",
+              "host_disk": 30_000_000_000, "host_disk_path": "/Users/probe/.colima/_lima/colima/disk",
+              "docker_disk_total": 98 * 1024 ** 3, "docker_disk_used": 16 * 1024 ** 3,
+              "root_total": 60_000_000_000, "root_used": 40_000_000_000, "docker_dir": 20_000_000_000,
+              "log_files": [{"container": "web-0", "path": "/var/lib/docker/containers/c0/c0-json.log",
+                             "size": 7_000_000}],
+              "totals": {"images": 810_000_000, "containers": 8192, "volumes": 50_000_000,
+                         "build_cache": 20_000_000, "reclaimable": 250_000_000},
+              "error": None}
     return """
 window.__TAURI_INTERNALS__ = {
   transformCallback: (cb) => { const id = Math.floor(Math.random()*1e9); window['_' + id] = cb; return id; },
