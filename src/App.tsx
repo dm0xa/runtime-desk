@@ -1793,6 +1793,10 @@ function App() {
     const ref = `${i.repository}:${i.tag}`;
     return !usedImageRefs.has(ref) && !usedImageRefs.has(i.id) && !usedImageRefs.has(i.id.slice(0, 12));
   });
+  // The prune dialog promises "unused" in every section; volumes pruning by Docker also
+  // skips mounted ones, so listing all volumes there would overstate what it removes.
+  const prunableVolumes = volumes.filter((v) => containersUsingVolume(v).length === 0);
+  const cacheLayers = cleanupCache?.profile === selected ? cleanupCache.report.build_cache : [];
   const selectedCount = [pruneOpts.containers, pruneOpts.networks, pruneOpts.build_cache, pruneOpts.images, pruneOpts.all_images, pruneOpts.volumes].filter(Boolean).length;
 
   const aiModel = ai.registry === "hf"
@@ -3552,7 +3556,7 @@ function App() {
                 <h2>Prune unused data</h2>
                 <p className="muted">
                   Context: <strong>{selected}</strong> · running containers are never touched
-                  {disk.reclaimable > 0 ? <> · up to {fmtSize(disk.reclaimable)} reclaimable</> : null}
+                  {disk.reclaimable > 0 ? <> · Docker estimates up to {fmtSize(disk.reclaimable)} reclaimable</> : null}
                 </p>
               </div>
               <button className="icon-plain" onClick={() => setShowPrune(false)} aria-label="Close" title="Close"><XIcon /></button>
@@ -3575,8 +3579,17 @@ function App() {
                 {networks.map((n) => <code key={n.name}>{n.name}</code>)}
               </PruneSection>
 
-              <PruneSection title="Build cache" desc="All Docker builder cache layers." checked={pruneOpts.build_cache} onToggle={(v) => setPruneOpts({ ...pruneOpts, build_cache: v })} count={1}>
-                <code>buildkit cache</code>
+              <PruneSection title="Build cache" desc="All Docker builder cache layers; layers a running build holds are skipped." checked={pruneOpts.build_cache} onToggle={(v) => setPruneOpts({ ...pruneOpts, build_cache: v })} count={cacheLayers.length || 1}>
+                {cacheLayers.length > 0
+                  ? cacheLayers.slice(0, 6).map((entry, i) => (
+                    <code key={i} title={entry.in_use ? "Held by a running build; prune skips it" : undefined}>
+                      {entry.kind || "build cache"} · {fmtSize(entry.size)}{entry.in_use ? " · in use" : ""}
+                    </code>
+                  ))
+                  : <code>buildkit cache</code>}
+                {cacheLayers.length > 6 && (
+                  <code>+{cacheLayers.length - 6} more · {fmtSize(cacheLayers.slice(6).reduce((n, c) => n + c.size, 0))}</code>
+                )}
               </PruneSection>
 
               <PruneSection title="Dangling images" desc="Images with no tag; safe to remove." checked={pruneOpts.images} onToggle={(v) => setPruneOpts({ ...pruneOpts, images: v })} empty={danglingImages.length === 0 ? "No dangling images" : undefined} count={danglingImages.length}>
@@ -3587,8 +3600,8 @@ function App() {
                 {unusedImages.map((i) => <code key={`${i.id}-${i.repository}-${i.tag}`}>{i.repository}:{i.tag}</code>)}
               </PruneSection>
 
-              <PruneSection danger title="Unused volumes" desc="Docker removes volumes not attached to any container. Data is not recoverable." checked={pruneOpts.volumes} onToggle={(v) => setPruneOpts({ ...pruneOpts, volumes: v })} empty={volumes.length === 0 ? "No volumes" : undefined} count={volumes.length}>
-                {volumes.map((v) => <code key={v.name}>{v.name}</code>)}
+              <PruneSection danger title="Unused volumes" desc="Docker removes volumes not attached to any container. Data is not recoverable." checked={pruneOpts.volumes} onToggle={(v) => setPruneOpts({ ...pruneOpts, volumes: v })} empty={prunableVolumes.length === 0 ? "No unused volumes" : undefined} count={prunableVolumes.length}>
+                {prunableVolumes.map((v) => <code key={v.name}>{v.name}</code>)}
               </PruneSection>
             </div>
 
