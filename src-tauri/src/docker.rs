@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -425,16 +426,86 @@ fn parse_platforms(raw: &str) -> Vec<ImagePlatform> {
         .collect()
 }
 
+/// Every key one row can be asked for by: the id `inspect` returns (`sha256:…`), the bare hex
+/// the images list prints, and the twelve-character prefix the table joins on. The list, the
+/// table and this command each name an image differently, and all three must hit.
+fn platform_keys(row: &ImagePlatform) -> Vec<String> {
+    let bare = row.id.strip_prefix("sha256:").unwrap_or(&row.id);
+    let mut keys: Vec<String> = Vec::with_capacity(4);
+    for key in [row.id.as_str(), bare] {
+        if key.len() >= 12 {
+            keys.push(key[..12].to_string());
+        }
+        keys.push(key.to_string());
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// An image id is a content digest, so a cached answer cannot become wrong: a rebuilt image has
+/// a new id, and only a pruned id leaves dead weight behind. Process-lifetime on purpose — one
+/// entry per image this window has ever shown, a few hundred bytes each.
+static PLATFORM_CACHE: std::sync::LazyLock<RwLock<std::collections::HashMap<String, ImagePlatform>>> =
+    std::sync::LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+
+/// The requested ids split into the rows the cache already answers and the ids it does not
+/// hold, both in request order. Pure, so the diffing is testable without a daemon.
+fn split_known(cache: &std::collections::HashMap<String, ImagePlatform>, ids: &[&str]) -> (Vec<ImagePlatform>, Vec<String>) {
+    let mut answered = Vec::with_capacity(ids.len());
+    let mut missing = Vec::new();
+    for id in ids {
+        match cache.get(*id) {
+            Some(row) => answered.push(row.clone()),
+            None => missing.push((*id).to_string()),
+        }
+    }
+    (answered, missing)
+}
+
+/// Rows for the requested ids, matched through every key a row answers to and returned in the
+/// caller's order. An id nothing answers for is simply absent: the table draws `—`, never an
+/// invented architecture.
+fn rows_for(rows: &[ImagePlatform], ids: &[&str]) -> Vec<ImagePlatform> {
+    let mut index: std::collections::HashMap<String, &ImagePlatform> = std::collections::HashMap::new();
+    for row in rows {
+        for key in platform_keys(row) {
+            index.insert(key, row);
+        }
+    }
+    ids.iter().filter_map(|id| index.get(*id).map(|row| (*row).clone())).collect()
+}
+
 /// `docker image ls` prints no platform, so the Images table learns which rows are emulated
-/// from one batched `image inspect`. 26 images cost 0.8 s including the CLI spawn, and the
-/// caller only asks again when the set of ids changes.
+/// from one batched `image inspect`. The whole set was re-inspected whenever the ids changed;
+/// the cache turns that into "inspect only what this window has never seen", so the second
+/// call for the same set spawns nothing at all.
 pub fn image_platforms(ids: &[String]) -> Result<Vec<ImagePlatform>, String> {
     let valid: Vec<&str> = ids.iter().map(String::as_str).filter(|id| valid_image_id(id)).collect();
     if valid.is_empty() { return Ok(Vec::new()); }
+    let (answered, missing) = match PLATFORM_CACHE.read() {
+        Ok(cache) => split_known(&cache, &valid),
+        Err(_) => (Vec::new(), valid.iter().map(|id| (*id).to_string()).collect()),
+    };
+    if missing.is_empty() {
+        return Ok(answered);
+    }
     let mut args = vec!["image", "inspect"];
-    args.extend(valid);
+    args.extend(missing.iter().map(String::as_str));
     let (raw, _client) = run_client(&args);
-    Ok(parse_platforms(&raw?))
+    // A refused inspect caches nothing and answers the caller the same error it saw before,
+    // so its next wave asks again and already-known rows are still there to merge.
+    let fetched = parse_platforms(&raw?);
+    if let Ok(mut cache) = PLATFORM_CACHE.write() {
+        for row in &fetched {
+            for key in platform_keys(row) {
+                cache.insert(key, row.clone());
+            }
+        }
+    }
+    let mut all = answered;
+    all.extend(fetched);
+    Ok(rows_for(&all, &valid))
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -625,7 +696,12 @@ pub struct DiskUsage {
 const DISK_TTL: Duration = Duration::from_secs(60);
 static DISK_CACHE: RwLock<Option<(Instant, DiskUsage)>> = RwLock::new(None);
 
+/// Counts cache invalidations. A verbose scan that started before one describes a store (or
+/// a profile) that has since changed, so its parsed rows must not seed the fresh cache.
+static INVALIDATIONS: AtomicU64 = AtomicU64::new(0);
+
 fn invalidate_disk_usage() {
+    INVALIDATIONS.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut slot) = DISK_CACHE.write() {
         *slot = None;
     }
@@ -644,19 +720,66 @@ pub struct VolumeSize {
 /// share its one-minute cache instead of paying for the scan on every Volumes visit.
 static VOLUME_SIZES_CACHE: RwLock<Option<(Instant, Vec<VolumeSize>)>> = RwLock::new(None);
 
+/// Largest first, then by name: the one order every producer of this cache answers in, so
+/// the Volumes page cannot tell whether the CLI or a seeded scan wrote the rows.
+fn sort_volume_sizes(rows: &mut [VolumeSize]) {
+    rows.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+}
+
+/// One row of either `system df -v` shape. The name is the key the page joins on, so a row
+/// without one is not a volume; a client that omits `Size` sizes it at 0 instead of losing
+/// the row.
+fn volume_size_row(v: &serde_json::Value) -> Option<VolumeSize> {
+    let name = v["Name"].as_str().filter(|n| !n.is_empty())?.to_string();
+    Some(VolumeSize { name, size: v["Size"].as_str().map(parse_size).unwrap_or(0) })
+}
+
+/// Volume rows from one full `system df -v` body (`{"Images":[…],"Volumes":[…],…}`), the
+/// shape Cleanup already holds. `None` when the body is not JSON or carries no `Volumes`
+/// array: a scan this app cannot read must seed nothing. A valid body with an empty array
+/// is `Some(vec![])`, which is a real "this profile has no volumes" answer.
+pub(crate) fn parse_volume_sizes(raw: &str) -> Option<Vec<VolumeSize>> {
+    let doc: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let rows = doc.get("Volumes")?.as_array()?;
+    Some(rows.iter().filter_map(volume_size_row).collect())
+}
+
+/// The state a scan must be judged against: read it before starting, pass it to
+/// [`seed_volume_sizes`]. Any prune, remove or profile switch between the two bumps it.
+pub(crate) fn invalidation_mark() -> u64 {
+    INVALIDATIONS.load(Ordering::SeqCst)
+}
+
+/// Hands the rows of a verbose scan the caller already parsed to the size cache, so the
+/// Volumes page and Sherlock's group page are answered without a second walk of the same
+/// store. Callers seed only after a successful parse, so a failed scan can never pin
+/// zeros; `mark` is the [`invalidation_mark`] taken when that scan started, and rows from
+/// before a prune, remove or profile switch are dropped instead of seeding a cache that
+/// has since moved on. `pub(crate)` plus a bool so the drop is visible to a test.
+pub(crate) fn seed_volume_sizes(rows: Vec<VolumeSize>, mark: u64) -> bool {
+    let mut fresh = rows;
+    sort_volume_sizes(&mut fresh);
+    if INVALIDATIONS.load(Ordering::SeqCst) != mark {
+        return false;
+    }
+    match VOLUME_SIZES_CACHE.write() {
+        Ok(mut slot) => {
+            // Re-check inside the write: an invalidation that landed while this thread
+            // waited for the lock clears the slot it competes with, and must win.
+            if INVALIDATIONS.load(Ordering::SeqCst) != mark {
+                return false;
+            }
+            *slot = Some((Instant::now(), fresh));
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 fn read_volume_sizes() -> Option<Vec<VolumeSize>> {
     let raw = run_docker(&["system", "df", "-v", "--format", "{{json .Volumes}}"]).ok()?;
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
-    Some(
-        rows.iter()
-            .filter_map(|v| {
-                Some(VolumeSize {
-                    name: v["Name"].as_str()?.to_string(),
-                    size: v["Size"].as_str().map(parse_size).unwrap_or(0),
-                })
-            })
-            .collect(),
-    )
+    Some(rows.iter().filter_map(volume_size_row).collect())
 }
 
 /// Every volume the client can size, largest first. Empty when the client cannot report.
@@ -671,7 +794,7 @@ pub fn volume_sizes() -> Vec<VolumeSize> {
     let Some(mut fresh) = read_volume_sizes() else {
         return Vec::new();
     };
-    fresh.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    sort_volume_sizes(&mut fresh);
     if let Ok(mut slot) = VOLUME_SIZES_CACHE.write() {
         *slot = Some((Instant::now(), fresh.clone()));
     }
@@ -982,6 +1105,48 @@ mod tests {
         assert!(super::parse_platforms("not json").is_empty());
     }
 
+    /// The Images table, the image list and `inspect` each name an image differently: the
+    /// `sha256:` id inspect returns, the bare hex `docker images` prints, and the twelve-
+    /// character prefix the table joins on. A cached row must answer all three, in the order
+    /// the caller asked, and an id nothing knows must stay absent (the column draws `—`).
+    #[test]
+    fn a_cached_platform_answers_every_name_the_table_uses() {
+        let long = ImagePlatform { id: format!("sha256:{}", "ab".repeat(32)), architecture: "amd64".into(), digest: "sha256:cd".into() };
+        let short = ImagePlatform { id: format!("sha256:{}", "ef".repeat(32)), architecture: "arm64".into(), digest: "sha256:01".into() };
+        let bare = long.id["sha256:".len()..].to_string();
+        let prefix = short.id["sha256:".len()..][..12].to_string();
+        let rows = vec![long.clone(), short.clone()];
+
+        // Asked by full id, bare hex and 12-char prefix — and in the caller's order.
+        let ids = [long.id.as_str(), bare.as_str(), prefix.as_str()];
+        let answered = super::rows_for(&rows, &ids);
+        assert_eq!(answered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [long.id.as_str(), long.id.as_str(), short.id.as_str()]);
+        assert_eq!(answered[2].architecture, "arm64");
+        // A pruned or unknown id is absent, never an invented architecture.
+        assert!(super::rows_for(&rows, &["ffffffffffff"]).is_empty());
+    }
+
+    /// Only unknown ids reach the CLI: the second call for a set the cache already holds asks
+    /// for nothing, which is what turns 793 ms of `image inspect` into no spawn at all.
+    #[test]
+    fn split_known_answers_hits_and_lists_only_misses() {
+        let known = ImagePlatform { id: format!("sha256:{}", "10".repeat(32)), architecture: "arm64".into(), digest: "sha256:11".into() };
+        let mut cache = std::collections::HashMap::new();
+        for key in super::platform_keys(&known) {
+            cache.insert(key, known.clone());
+        }
+        let prefix = &known.id["sha256:".len()..][..12];
+        let unknown = "ffffffffffff";
+        let ids = [prefix, unknown];
+        let (answered, missing) = super::split_known(&cache, &ids);
+        assert_eq!(answered.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [known.id.as_str()]);
+        assert_eq!(missing, vec![unknown.to_string()]);
+        // Nothing known: every id is a miss, in request order.
+        let (none, all) = super::split_known(&std::collections::HashMap::new(), &ids);
+        assert!(none.is_empty());
+        assert_eq!(all, vec![prefix.to_string(), unknown.to_string()]);
+    }
+
     /// The project page's health table reads these three fields straight off inspect: the exit
     /// status of the last run, whether the kernel killed it, and the service name Compose
     /// stamped. A missing mapping shows up as a row that says "up" for a dead container.
@@ -1034,8 +1199,18 @@ mod tests {
         assert!(!all.iter().any(|j| j.as_slice() == ["image", "prune", "-f"]));
     }
 
-    use super::{adopted_socket, disk_usage, human_bytes, percent, set_endpoint, DiskUsage, DISK_CACHE};
+    use super::{
+        adopted_socket, disk_usage, human_bytes, invalidation_mark, parse_volume_sizes, percent,
+        seed_volume_sizes, set_endpoint, volume_sizes, DiskUsage, ImagePlatform, VolumeSize,
+        DISK_CACHE, VOLUME_SIZES_CACHE,
+    };
+    use std::sync::Mutex;
     use std::time::Instant;
+
+    /// `set_endpoint` writes the process-wide endpoint and clears both caches, so the tests
+    /// that seed either of them take this lock: one test's profile switch must not empty the
+    /// cache another is reading.
+    static CACHE_LOCK: Mutex<()> = Mutex::new(());
 
     /// The launch sets the socket from colima's convention and asks `colima status` to
     /// confirm it behind the caller. That late answer belongs to the profile it was started
@@ -1053,11 +1228,84 @@ mod tests {
     /// 1.3 s for it every 15 s was the slowest part of the app.
     #[test]
     fn disk_usage_is_cached_until_invalidated() {
+        let _guard = CACHE_LOCK.lock().expect("cache test lock");
         let seeded = DiskUsage { images: 42, containers: 7, volumes: 3, build_cache: 1, reclaimable: 9 };
         *DISK_CACHE.write().expect("cache lock") = Some((Instant::now(), seeded));
         assert_eq!(disk_usage().images, 42);
         set_endpoint(Some("unix:///nonexistent.sock".into()));
         assert!(DISK_CACHE.read().expect("cache lock").is_none());
+    }
+
+    /// Cleanup's `system df -v` body is the same scan that sizes the Volumes page, so its
+    /// volume rows are the ones the cache must learn from. A body this app cannot read
+    /// answers nothing (never an empty list, which would pin "no volumes" for a minute).
+    #[test]
+    fn volume_sizes_come_out_of_a_verbose_body() {
+        const BODY: &str = r#"{"Images":[{"ID":"sha256:aaa","Size":"986MB"}],
+"Containers":[{"ID":"abc","Size":"1.2MB"}],
+"Volumes":[
+{"Driver":"local","Links":"0","Mountpoint":"/var/lib/docker/volumes/old/_data","Name":"old","Size":"71.96MB"},
+{"Driver":"local","Links":"1","Mountpoint":"/var/lib/docker/volumes/data/_data","Name":"data","Size":"2MB"}],
+"BuildCache":[]}"#;
+        let rows = parse_volume_sizes(BODY).expect("a verbose body carries its volumes");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.iter().find(|v| v.name == "old").map(|v| v.size), Some(71_960_000));
+        assert_eq!(rows.iter().find(|v| v.name == "data").map(|v| v.size), Some(2_000_000));
+
+        // An empty array is a real answer; a body without one is not an answer at all.
+        assert_eq!(parse_volume_sizes(r#"{"Images":[],"Volumes":[],"BuildCache":[]}"#).map(|v| v.len()), Some(0));
+        assert!(parse_volume_sizes(r#"{"Images":[]}"#).is_none());
+        assert!(parse_volume_sizes("docker: command not found").is_none());
+        assert!(parse_volume_sizes("").is_none());
+    }
+
+    /// A seeded scan answers the next read without spawning a client: the endpoint points at
+    /// a socket that does not exist, so any CLI call would answer empty instead of these rows.
+    #[test]
+    fn seeded_volume_sizes_are_served_without_a_client() {
+        let _guard = CACHE_LOCK.lock().expect("cache test lock");
+        set_endpoint(Some("unix:///nonexistent.sock".into()));
+        let mark = invalidation_mark();
+        assert!(seed_volume_sizes(
+            vec![
+                VolumeSize { name: "small".into(), size: 1 },
+                VolumeSize { name: "large".into(), size: 9_000 },
+                VolumeSize { name: "large-too".into(), size: 9_000 },
+            ],
+            mark,
+        ));
+        let rows = volume_sizes();
+        let names: Vec<&str> = rows.iter().map(|v| v.name.as_str()).collect();
+        // Largest first, then by name — the order the CLI path sorts into.
+        assert_eq!(names, ["large", "large-too", "small"]);
+        // The same contract the disk reading has: a profile switch (endpoint change) and a
+        // prune both drop the cached sizes.
+        set_endpoint(Some("unix:///elsewhere.sock".into()));
+        assert!(VOLUME_SIZES_CACHE.read().expect("cache lock").is_none());
+    }
+
+    /// A scan that started before a switch must not seed the profile it did not scan: the
+    /// real case is a Cleanup scan in flight while the user switches profile.
+    #[test]
+    fn a_scan_from_before_an_invalidation_does_not_seed() {
+        let _guard = CACHE_LOCK.lock().expect("cache test lock");
+        set_endpoint(Some("unix:///first.sock".into()));
+        let stale = invalidation_mark();
+        set_endpoint(Some("unix:///second.sock".into()));
+        assert!(!seed_volume_sizes(vec![VolumeSize { name: "old".into(), size: 7 }], stale));
+        assert!(VOLUME_SIZES_CACHE.read().expect("cache lock").is_none());
+    }
+
+    /// An empty volume list is a reading, not a miss: seeding it must still answer from
+    /// cache rather than falling through to a client.
+    #[test]
+    fn an_empty_seed_is_a_cached_answer() {
+        let _guard = CACHE_LOCK.lock().expect("cache test lock");
+        set_endpoint(Some("unix:///nonexistent.sock".into()));
+        assert!(seed_volume_sizes(Vec::new(), invalidation_mark()));
+        assert!(volume_sizes().is_empty());
+        let cached = VOLUME_SIZES_CACHE.read().expect("cache lock");
+        assert!(matches!(cached.as_ref(), Some((_, rows)) if rows.is_empty()));
     }
 
     /// Untagged rows are new information, a tagged row already in the base list is not.

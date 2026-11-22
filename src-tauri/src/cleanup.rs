@@ -420,18 +420,27 @@ fn annotate_volume_created(volumes: &mut [CleanupVolume], now: u64) {
     }
 }
 
-/// Report for the selected profile. The Docker scan, the guest scan and the host disk
-/// stat are independent processes, so they run together: the guest `du` costs ~3 s.
+/// Report for the selected profile. The Docker scan, the guest scan, the host disk stat
+/// and Docker's own summary are independent processes, so they run together: the guest
+/// `du` costs ~3 s and the summary walk another ~2.7 s, and neither may queue behind the
+/// verbose scan it does not need.
 pub fn report(profile: &str) -> CleanupReport {
     let now = now_secs();
-    let (df, guest, host) = std::thread::scope(|scope| {
+    // Taken before the scan runs: a prune, a remove or a profile switch while it is in
+    // flight describes a different store, and its volume rows must not seed the new cache.
+    let mark = docker::invalidation_mark();
+    let (df, guest, host, totals) = std::thread::scope(|scope| {
         let df = scope.spawn(run_df);
         let guest = scope.spawn(|| colima::ssh_script(profile, GUEST_SCRIPT));
         let host = scope.spawn(move || colima::disk_image(profile));
+        // `docker system df` is a second walk with its own numbers — the deduped `df -v`
+        // rows are not its totals — so it is a fourth child, not a follow-up read.
+        let totals = scope.spawn(docker::disk_usage);
         (
             df.join().unwrap_or_else(|_| (Err("cleanup scan failed".to_string()), "docker")),
             guest.join().unwrap_or_else(|_| Err("virtual machine scan failed".to_string())),
             host.join().unwrap_or_else(|_| (String::new(), 0)),
+            totals.join().unwrap_or_default(),
         )
     });
     let (df, client) = df;
@@ -439,10 +448,17 @@ pub fn report(profile: &str) -> CleanupReport {
         Ok(raw) => parse_report(raw, guest.as_deref().unwrap_or(""), now),
         Err(e) => CleanupReport { error: Some(e.clone()), ..Default::default() },
     };
+    // The verbose body already lists every volume and what it costs: hand those rows to the
+    // size cache so the Volumes and group pages are answered without walking the same store
+    // again inside the one-minute window. A failed scan (`Err`) or a body this app cannot
+    // read seeds nothing, so a bad answer can never pin zeros.
+    if let Some(rows) = df.as_ref().ok().and_then(|raw| docker::parse_volume_sizes(raw)) {
+        docker::seed_volume_sizes(rows, mark);
+    }
     if !report.volumes.is_empty() {
         annotate_volume_created(&mut report.volumes, now);
     }
-    report.totals = docker::disk_usage();
+    report.totals = totals;
     report.client = client.to_string();
     report.host_disk = host.1;
     report.host_disk_path = host.0;
@@ -486,6 +502,19 @@ mod tests {
 ],"BuildCache":[]}"#;
 
     const GUEST: &str = "root_total_kb=19221248\nroot_used_kb=1468788\ndocker_total_kb=102400000\ndocker_used_kb=17000000\ndocker_kb=1199304\n7101071\t/var/lib/docker/containers/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664/300dc36d7982461feb3725193a14975f50ca3a74761ce8afc4935f8e81b18664-json.log\n17771\t/var/lib/docker/containers/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5/81ce1d7b97731665754328544fdfc1c436be019dcb8295faa5eb17e651592ed5-json.log\n";
+
+    #[test]
+    fn the_scan_that_fills_the_report_also_sizes_every_volume() {
+        // Cleanup seeds the volume-size cache from this same body, so the sizes it hands over
+        // must be the sizes its own rows show: one number, two readers.
+        let report = parse_report(DF, GUEST, 1_800_000_000);
+        let seeded = crate::docker::parse_volume_sizes(DF).expect("the scan body parses");
+        assert_eq!(seeded.len(), report.volumes.len());
+        for volume in &report.volumes {
+            let size = seeded.iter().find(|v| v.name == volume.name).map(|v| v.size);
+            assert_eq!(size, Some(volume.size), "{}", volume.name);
+        }
+    }
 
     #[test]
     fn images_collapse_per_id_and_flag_dangling() {
