@@ -6,6 +6,21 @@ is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the versions are
 
 ## Unreleased
 
+### Changed
+
+- **Cleanup is twice as fast.** Its two Docker storage walks now run together, and the Volumes page reuses the scan Cleanup already did instead of walking the same disk again.
+- **Refreshing and launching stop re-reading what they already know.** A manual refresh no longer repeats the 1.2 s `colima status` read, and launch no longer runs `colima version` for a Settings line that reads it on open.
+- **The 10-minute chart costs what the 2-minute one does.** A sparkline draws one point per pixel instead of formatting 600 points into a 120 px box.
+- **Images only inspect what changed.** Pulling one image no longer re-inspects every image the window already knows.
+- **Opening a link no longer freezes the window** while macOS hands it to the browser.
+
+### Fixed
+
+- **Activity follows the profile you selected.** A switch restarts the sampler, so the page cannot show the previous profile's containers and totals.
+- **Forty containers near their memory limit produce a warning.** Past three, they raise one grouped notice instead of banners that pushed each other out unseen.
+- **A stalled sampler finally says so.** The "No sample for Ns" line compares against the last real sample, not the last tick.
+- **A profile switch cannot paint the previous guest's numbers**, and the Machine page stops polling `colima ssh` while the window is hidden.
+
 ## 1.8.0 — 2026-11-22
 
 ### Changed
