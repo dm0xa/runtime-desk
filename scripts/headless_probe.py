@@ -76,6 +76,14 @@ PODMAN_NETWORKS = [
 ]
 
 
+def stream_stat(i: int, name: str, cpu: float, mem_pct: int = 12) -> dict:
+    """One `docker stats` row for the stub stream. `mem_pct` is what the OOM guard reads."""
+    limit = 1024 ** 3 if mem_pct >= 90 else 4 * 1024 ** 3
+    return {"id": f"s{i}", "name": name, "cpu": cpu, "mem": int(limit * mem_pct / 100),
+            "mem_limit": limit, "mem_pct": mem_pct, "pids": 3,
+            "net_rx": 1000, "net_tx": 500, "block_read": 4096, "block_write": 2048}
+
+
 def plain_containers(n: int) -> list[dict]:
     return [{"id": f"c{i}", "name": f"web-{i}", "image": "nginx:1", "status": "Up 2 hours",
              "ports": "0.0.0.0:8080->80/tcp", "created_at": "2026-11-15T10:00:00Z", "state": "running",
@@ -133,6 +141,20 @@ STATES: dict[str, dict] = {
     # Two machines: every Podman list must say which one it is reading, and the picker must stick.
     "two-podman-machines": {"machines": [MACHINE, {**MACHINE, "name": "podman-machine-test", "default": False, "running": True}]},
     "slow-probes": {"hold": ["system_status_cmd", "list_profiles_cmd"]},
+    # Guards (asserted by the gate, measured by scenario runs):
+    # a full 10-minute ring buffer at the 10-minute window — the sparkline point budget;
+    "full-buffer": {"guard": "full-buffer", "live_window": 600,
+                    "stream": {"default": [stream_stat(0, "web-0", 1.5), stream_stat(1, "web-1", 2.5),
+                                           stream_stat(2, "web-2", 0.5)]}},
+    # forty containers at 95% of a 1 GiB limit: the OOM notice must name the count, not vanish;
+    "oom-40": {"expect_notice": 40, "containers": plain_containers(40),
+               "stream": {"default": [stream_stat(i, f"pressured-{i}", 1 + i % 5, mem_pct=95)
+                                      for i in range(40)]}},
+    # two running profiles: switching must start a new sampler for the new daemon;
+    "two-running": {"guard": "sampler",
+                    "profiles": [PROFILE, {**PROFILE, "name": "beta", "status": "Running"}],
+                    "stream": {"default": [stream_stat(0, "default-web", 1.5)],
+                               "beta": [stream_stat(1, "beta-web", 4.5)]}},
     "k8s-not-enabled": {"cluster": {**CLUSTER, "enabled": False, "reachable": False, "version": None,
                                     "nodes": 0, "nodes_ready": 0, "pods": 0, "pods_running": 0,
                                     "deployments": 0, "deployments_ready": 0, "namespaces": [], "error": None}},
@@ -204,6 +226,7 @@ def stub_js(state: str) -> str:
                          "build_cache": 20_000_000, "reclaimable": 250_000_000},
               "error": None}
     return """
+window.__probe = { expectNotice: %(expect_notice)s };
 window.__TAURI_INTERNALS__ = {
   transformCallback: (cb) => { const id = Math.floor(Math.random()*1e9); window['_' + id] = cb; return id; },
   convertFileSrc: (p) => p,
@@ -251,22 +274,33 @@ window.__TAURI_INTERNALS__ = {
           mem_pct: 25, pids: 3, net_rx: 10, net_tx: 20, block_read: 5, block_write: 6 }];
       // The live path: one child streaming every container at about 1 Hz. The stub pushes a
       // sample a second so the probe renders the real Activity view, not its poll fallback.
+      // Each start is counted under the profile selected when it happened: the backend command
+      // takes no profile, so the sidebar's active row is the identity the app is sampling.
       case "stats_all_start_cmd": {
         const ch = args && args.onSample;
         if (!ch || !ch.onmessage) return "polling";
+        const active = document.querySelector('.side-profile.active .side-profile-name');
+        const profile = (active && active.textContent || 'default').trim();
+        window.__statsStarts = window.__statsStarts || [];
+        window.__statsStarts.push(profile);
         if (window.__activity) clearInterval(window.__activity);
+        const rows = (%(streams)s)[profile] || (%(streams)s).default || [];
         let tick = 0;
         const emit = () => {
           tick += 1;
-          ch.onmessage(JSON.stringify({ id: "c0", name: "web-0", cpu: 1 + (tick %% 5),
-            mem: 1048576 * (24 + (tick %% 7)), mem_limit: 4294967296, mem_pct: 12, pids: 3,
-            net_rx: 1000 * tick, net_tx: 500 * tick, block_read: 4096, block_write: 2048 }));
+          for (const s of rows) {
+            ch.onmessage(JSON.stringify(Object.assign({}, s, {
+              cpu: s.cpu + (tick %% 5),
+              net_rx: s.net_rx + 1000 * tick, net_tx: s.net_tx + 500 * tick,
+            })));
+          }
         };
         emit();
         window.__activity = setInterval(emit, 1000);
         return "streaming";
       }
       case "stats_all_stop_cmd":
+        window.__statsStops = (window.__statsStops || 0) + 1;
         if (window.__activity) { clearInterval(window.__activity); window.__activity = null; }
         return "stopped";
       case "image_detail_cmd": return { id: "sha256:aaaa", repository: "nginx", tag: "1", size: "100MB",
@@ -308,6 +342,8 @@ window.__TAURI_INTERNALS__ = {
         "podman_volumes": json.dumps(cfg.get("podman_volumes", PODMAN_VOLUMES)),
         "podman_networks": json.dumps(cfg.get("podman_networks", PODMAN_NETWORKS)),
         "hold": json.dumps(cfg.get("hold", [])),
+        "streams": json.dumps(cfg.get("stream", {"default": [stream_stat(0, "web-0", 1.0)]})),
+        "expect_notice": json.dumps(cfg.get("expect_notice", 0)),
         "release": json.dumps(cfg.get("release", {"installed": "1.0.2", "latest": None,
                                                   "update_available": False, "url": ""})),
     }
@@ -364,6 +400,34 @@ REPORT_JS = r"""() => {
     // First data row of the visible list, so a collapsing column is a number, not a hunch.
     cells: [...([...document.querySelectorAll('tbody tr')].find((r) => !r.classList.contains('group-row'))?.children ?? [])]
       .map((td) => Math.round(td.getBoundingClientRect().width)),
+    // Guards: deterministic facts, not layout. The point budget is the sparkline's own
+    // coordinate space (viewBox width, 120), so it does not depend on the row's CSS width.
+    guards: (() => {
+      const rows = [...document.querySelectorAll('.activity-table polyline')].map((el) => {
+        const svg = el.ownerSVGElement;
+        const box = (svg?.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number);
+        const width = box.length === 4 && box[2] > 0 ? box[2] : (svg?.clientWidth || 0);
+        const pairs = (el.getAttribute('points') || '').trim().split(/\s+/).filter(Boolean).length;
+        return { width, pairs };
+      });
+      const worst = rows.reduce((a, s) => (s.pairs > a.pairs ? s : a), { width: 0, pairs: 0 });
+      const titles = [...document.querySelectorAll('.notice-card .notice-title')]
+        .map((e) => (e.textContent || '').trim());
+      const grouped = titles.filter((t) => /^\d+ containers are close to their memory limits$/.test(t));
+      const perContainer = titles.filter((t) =>
+        / is close to its memory limit$| is using the VM's memory with no limit$/.test(t)).length;
+      const groupedCount = grouped.length ? Number(grouped[0].split(' ')[0]) : 0;
+      const expect = (window.__probe && window.__probe.expectNotice) || 0;
+      return {
+        spark: { rows: rows.length, width: worst.width, worstPairs: worst.pairs,
+                 worstRatio: +(worst.width ? worst.pairs / worst.width : 0).toFixed(2),
+                 budget: 2 * worst.width, ok: worst.pairs <= 2 * worst.width },
+        notice: { expected: expect, perContainer, grouped: grouped.length, groupedCount,
+                  ok: expect === 0 ? true
+                    : grouped.length > 0 ? groupedCount === expect
+                    : perContainer > 0 && perContainer <= 3 },
+      };
+    })(),
     errors: [],
     // About is a centered column, not a grid: print the identity block's width and the link row count.
     about: {
@@ -372,6 +436,86 @@ REPORT_JS = r"""() => {
     },
   };
 }"""
+
+
+SAMPLER_READ = r"""() => {
+  const label = document.querySelector('.activity-chart-peak')?.textContent || '';
+  const m = label.match(/·\s*(\d+)\s*s of/);
+  return {
+    recorded: m ? Number(m[1]) : null,
+    starts: (window.__statsStarts || []).slice(),
+    stops: window.__statsStops || 0,
+    rows: [...document.querySelectorAll('.activity-table tbody tr td:first-child')]
+      .map((e) => (e.textContent || '').trim()).filter(Boolean),
+  };
+}"""
+
+
+def guard_probe(browser, port: int, state: str, width: int, kind: str) -> dict:
+    """Measure a guard in its own context with a fake clock.
+
+    Two guards need time the wall clock will not give: a full 600-sample ring buffer, and a
+    sampler restart whose totals series must visibly start over. Both run on Playwright's
+    clock, so the numbers come from counted ticks, never from how fast the machine is.
+    """
+    ctx = browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=2)
+    pg = ctx.new_page()
+    pg.clock.install()
+    pg.add_init_script(stub_js(state))
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)[:240]))
+    try:
+        pg.goto(f"http://localhost:{port}/", wait_until="load")
+        pg.evaluate("""() => {
+          localStorage.setItem('runtimeDesk.onboarded','1');
+          localStorage.setItem('runtimeDesk.layoutVersion','3');
+          localStorage.setItem('runtimeDesk.widgets', JSON.stringify({recent:true}));
+          localStorage.setItem('runtimeDesk.liveWindow','600');
+        }""")
+        pg.reload(wait_until="load")
+        pg.wait_for_timeout(1200)
+        pg.get_by_role("button", name=re.compile(r"^Activity\b")).first.click(timeout=3000)
+        pg.wait_for_timeout(500)
+        if kind == "full-buffer":
+            # Ten minutes of ticks: the ring holds its 600 samples and the view draws the
+            # 10-minute window. The polyline must stay within one point per horizontal pixel
+            # (two, with slack) whatever the buffer holds.
+            pg.clock.run_for("10:00")
+            rep = pg.evaluate(REPORT_JS)
+            spark = rep["guards"]["spark"]
+            spark["chart"] = pg.evaluate(
+                "() => document.querySelector('.activity-chart-peak')?.textContent || ''")
+            spark["samples_note"] = "600 accounting ticks via fake clock"
+            spark["ok"] = spark["worstPairs"] <= 2 * spark["width"]
+            return {"spark": spark, "errors": errors[:3]}
+        if kind == "sampler":
+            # A minute of history on the first profile: long enough that a reset is visible
+            # as a smaller number, not as a plausible one.
+            pg.clock.run_for("01:00")
+            before = pg.evaluate(SAMPLER_READ)
+            pg.locator(".side-profile", has_text="beta").locator(".side-profile-main").first.click()
+            pg.wait_for_timeout(300)
+            pg.clock.run_for("00:03")
+            after = pg.evaluate(SAMPLER_READ)
+            fails: list[str] = []
+            beta_starts = after["starts"].count("beta")
+            if beta_starts < 1:
+                fails.append(f"no stats_all_start_cmd for beta (starts {after['starts']})")
+            if len(after["starts"]) <= len(before["starts"]):
+                fails.append(f"start count did not grow ({len(before['starts'])} -> {len(after['starts'])})")
+            if after["stops"] <= before["stops"]:
+                fails.append(f"old sampler was not stopped (stops {before['stops']} -> {after['stops']})")
+            if before["recorded"] is None or after["recorded"] is None:
+                fails.append("chart did not report a recorded span")
+            elif after["recorded"] >= before["recorded"]:
+                fails.append(f"totals series was not reset ({before['recorded']} s -> {after['recorded']} s)")
+            if after["rows"] != ["beta-web"]:
+                fails.append(f"rows still name the old profile: {after['rows']}")
+            return {"sampler": {"ok": not fails, "fail": "; ".join(fails),
+                                "before": before, "after": after}, "errors": errors[:3]}
+        return {"ok": False, "fail": f"unknown guard {kind}"}
+    finally:
+        ctx.close()
 
 
 def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: Path,
@@ -385,6 +529,7 @@ def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: P
         raise SystemExit("dist/ is missing; run `npm run build` first")
 
     port = probe_port()
+    cfg = {**BASE, **STATES[state]}
     srv = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--directory", str(DIST)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.8)
@@ -403,11 +548,12 @@ def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: P
                 if not fresh:
                     # Set the persisted keys after the origin exists, then reload: an init
                     # script can land after the module script has already read them.
-                    pg.evaluate("""() => {
+                    pg.evaluate(f"""() => {{
                       localStorage.setItem('runtimeDesk.onboarded','1');
                       localStorage.setItem('runtimeDesk.layoutVersion','3');
-                      localStorage.setItem('runtimeDesk.widgets', JSON.stringify({recent:true}));
-                    }""")
+                      localStorage.setItem('runtimeDesk.widgets', JSON.stringify({{recent:true}}));
+                      localStorage.setItem('runtimeDesk.liveWindow','{cfg.get("live_window", 120)}');
+                    }}""")
                     pg.reload(wait_until="load")
                 pg.wait_for_timeout(1500)
                 for index, page in enumerate(pages):
@@ -435,8 +581,27 @@ def run(state: str, pages: list[str], widths: list[int], shots: bool, out_dir: P
                                             "error": f"navigation failed: {str(exc)[:160]}"})
                             continue
                         pg.wait_for_timeout(1100)
+                    if page == "activity" and cfg.get("expect_notice"):
+                        # The OOM notice is raised by the activity subscription, one tick after
+                        # the page opens: wait for the banner rather than guess a sleep.
+                        try:
+                            pg.wait_for_selector(".notice-card", timeout=4000)
+                        except Exception:  # noqa: BLE001 - a missing banner is the assertion's job
+                            pass
                     rep = pg.evaluate(REPORT_JS)
                     rep.update({"state": state, "page": page, "width": width, "errors": errors[:6]})
+                    if page == "activity" and cfg.get("guard"):
+                        # Guards that need more time than the wall clock allows run in their own
+                        # fake-clock context, so their numbers are ticks, not machine speed.
+                        try:
+                            probe = guard_probe(browser, port, state, width, cfg["guard"])
+                        except Exception as exc:  # noqa: BLE001 - a crash is a failed assertion
+                            probe = {"ok": False, "fail": f"guard probe crashed: {str(exc)[:160]}"}
+                        rep["guards"]["probe"] = probe
+                        if probe.get("spark"):
+                            rep["guards"]["spark"] = probe["spark"]
+                        if probe.get("sampler"):
+                            rep["guards"]["sampler"] = probe["sampler"]
                     results.append(rep)
                     if shots:
                         out_dir.mkdir(parents=True, exist_ok=True)
@@ -490,6 +655,26 @@ def main() -> None:
                 failures.append(f"{where}: .{item['cls']} overflows by {item['over']}px")
             for err in rep["errors"]:
                 failures.append(f"{where}: console error {err}")
+            # Guards. The point budget applies to every Activity render; a shallow history is
+            # simply under budget. The notice contract only means anything where 40 containers
+            # are pressured, which the state itself declares.
+            guards = rep.get("guards") or {}
+            spark = guards.get("spark") or {}
+            if rep.get("page") == "activity" and spark.get("width", 0) > 0 \
+                    and spark.get("worstPairs", 0) > 2 * spark.get("width", 0):
+                failures.append(f"{where}: activity sparkline {spark['worstPairs']} points "
+                                f"> 2x{spark['width']} (ratio {spark['worstRatio']})")
+            notice = guards.get("notice") or {}
+            if rep.get("page") == "activity" and notice.get("expected") and not notice.get("ok"):
+                failures.append(f"{where}: {notice['expected']} pressured containers raised "
+                                f"{notice['perContainer']} per-container and {notice['grouped']} "
+                                f"grouped notices")
+            sampler = guards.get("sampler")
+            if sampler and not sampler.get("ok"):
+                failures.append(f"{where}: sampler {sampler.get('fail')}")
+            probe = guards.get("probe") or {}
+            if probe.get("fail"):
+                failures.append(f"{where}: guard probe {probe['fail']}")
         print(f"{len(failures)} layout regressions")
         for line in failures[:60]:
             print(" ", line)

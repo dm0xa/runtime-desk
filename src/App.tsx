@@ -122,6 +122,10 @@ function computeWidgetSpans(keys: WidgetKey[], cols: number, overrides: Record<s
 
 const NARROW_GRID = "(max-width: 1000px)";
 
+/** The notice stack holds three rows; past this many pressured containers the OOM guard
+ *  raises one grouped notice instead of thirty-seven banners that would evict each other. */
+const OOM_NOTICE_BUDGET = 3;
+
 /** Grid width follows the CSS breakpoint so spans can be computed for 2 or 4 columns. */
 function useGridColumns(): number {
   const [cols, setCols] = useState(() => (typeof window !== "undefined" && window.matchMedia(NARROW_GRID).matches ? 2 : 4));
@@ -459,6 +463,8 @@ function App() {
   const [limitTarget, setLimitTarget] = useState<{ id: string; name: string; used: number; current: number } | null>(null);
   /** Notice id per pressured container: one alert while it stays over the threshold. */
   const pressuredRef = useRef(new Map<string, number>());
+  /** The grouped OOM notice and the set it was raised for, so it is replaced only on change. */
+  const oomGroupRef = useRef<{ sig: string; id: number } | null>(null);
   const [trail, setTrail] = useState<Subject[]>([]);
   const subject = trail.length > 0 ? trail[trail.length - 1] : null;
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -1249,7 +1255,11 @@ function App() {
   async function loadDiagnostics(profile = selected) {
     if (!profile) return;
     setDiagLoading(true);
-    setDiag(await safe(invoke<VmDiagnostics>("vm_diagnostics_cmd", { profile }), null as unknown as VmDiagnostics));
+    const next = await safe(invoke<VmDiagnostics>("vm_diagnostics_cmd", { profile }), null as unknown as VmDiagnostics);
+    // A slow `colima ssh` can land after the user switched profiles: its numbers describe
+    // the previous guest and must not paint the new profile's Machine page.
+    if (profile !== selectedRef.current) return;
+    setDiag(next);
     setDiagLoading(false);
   }
   async function checkVersion() {
@@ -1293,11 +1303,15 @@ function App() {
   }, [tab, settingsTab, appRelease]);
   async function loadConfig(name: string) {
     if (!name) return;
-    setCfg(await safe(invoke<ProfileConfig>("profile_config_cmd", { profile: name }), null as unknown as ProfileConfig));
+    const next = await safe(invoke<ProfileConfig>("profile_config_cmd", { profile: name }), null as unknown as ProfileConfig);
+    if (name !== selectedRef.current) return;
+    setCfg(next);
   }
   async function loadStatus(name: string, fresh = false) {
     if (!name) return;
-    setStatus(await safe(invoke<Status>("status_cmd", { profile: name, fresh }), {} as Status));
+    const next = await safe(invoke<Status>("status_cmd", { profile: name, fresh }), {} as Status);
+    if (name !== selectedRef.current) return;
+    setStatus(next);
   }
   /** `colima version` costs ~0.5 s and only changes on upgrade, so it stays out of refresh. */
   async function loadVersion() {
@@ -1350,11 +1364,44 @@ function App() {
   // OOM guard: it reads the stats the monitor already samples instead of adding a poll, so
   // it runs while the Activity card or page is on. A container crossing the pressure
   // threshold raises one notice; dropping back below it withdraws that notice.
+  //
+  // The notice list holds three, so forty pressured containers cannot each have a banner:
+  // past three the guard raises one grouped notice naming the worst, instead of tracking
+  // thirty-seven containers whose notice was evicted and would never be shown again.
   const vmMemoryRef = useRef(0);
   vmMemoryRef.current = profiles.find((p) => p.name === selected)?.memory ?? 0;
   useEffect(() => subscribeActivity(() => {
     const pressure = memoryPressure(activitySnapshot().stats, vmMemoryRef.current);
     const open = new Set(pressure.map((p) => p.id));
+    if (pressure.length > OOM_NOTICE_BUDGET) {
+      // Grouped mode replaces per-container banners rather than mixing the two.
+      for (const [id, noticeId] of [...pressuredRef.current]) {
+        pressuredRef.current.delete(id);
+        setNotices((list) => list.filter((n) => n.id !== noticeId));
+      }
+      const worst = pressure.slice(0, 3)
+        .map((p) => `${p.name} ${p.pct.toFixed(0)}% of ${p.unbounded ? "the VM" : fmtBytes(p.limit)}`)
+        .join(", ");
+      // Republish only when the set changes: a count that drifts by one each sample would
+      // otherwise replace the banner every tick.
+      const sig = `${pressure.length}|${pressure.slice(0, 3).map((p) => p.id).join(",")}`;
+      if (oomGroupRef.current?.sig === sig) return;
+      const previous = oomGroupRef.current?.id;
+      if (previous !== undefined) setNotices((list) => list.filter((n) => n.id !== previous));
+      const noticeId = pushNotice({
+        kind: "error",
+        title: `${pressure.length} containers are close to their memory limits`,
+        detail: `Worst: ${worst}. Docker OOM-kills a container at 100% of its limit: raise the limits, or cut what these run.`,
+        actions: [{ label: "Open Activity", run: () => go({ tab: "activity" }) }],
+      });
+      oomGroupRef.current = { sig, id: noticeId };
+      return;
+    }
+    const grouped = oomGroupRef.current?.id;
+    if (grouped !== undefined) {
+      setNotices((list) => list.filter((n) => n.id !== grouped));
+      oomGroupRef.current = null;
+    }
     for (const p of pressure) {
       if (pressuredRef.current.has(p.id)) continue;
       // A container without a limit gets the action that would confine it.
@@ -1890,12 +1937,15 @@ function App() {
     });
   }, [tab, selected, selectedRunning, cleanupNonce, cleanupCache]);
   // Guest diagnostics poll only while the Machine page is visible; the ssh round trip is cheap
-  // but the kernel-log scan is not free.
+  // but the kernel-log scan is not free. A backgrounded window stops paying for it, as
+  // docs/DEVELOPMENT.md promises, and returning reads once at once.
   useEffect(() => {
     if (tab !== "runtimes" || !selected || !selectedRunning) return;
-    void loadDiagnostics(selected);
-    const id = setInterval(() => void loadDiagnostics(selected), 15000);
-    return () => clearInterval(id);
+    const run = () => { if (document.visibilityState === "visible") void loadDiagnostics(selected); };
+    run();
+    const id = setInterval(run, 15000);
+    document.addEventListener("visibilitychange", run);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", run); };
   }, [tab, selected, selectedRunning]);
   // Live refresh from `docker events` while the window is visible. Same requirements as the
   // container views (`featureGate`), plus a finished tool probe: the gate calls a not-yet-probed

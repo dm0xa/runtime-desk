@@ -108,7 +108,7 @@ Two ceilings can kill a container, and the page says which is close:
 - **cgroup limit** — `web is at 94% of its 2.0 GiB limit`; Docker OOM-kills at 100%.
 - **no limit** — `docker stats` reports the VM's whole memory, so 98% of it is one spike from OOM-killing the guest. The row prints the ceiling given, so an unlimited container shows `5.9 GiB / 6.0 GiB`.
 
-At 90% of either, bar and number turn red, the summary line names up to three containers and their ceiling (`+N more`), and a notice appears once per container, withdrawn under 90%.
+At 90% of either, bar and number turn red, the summary line names up to three containers and their ceiling (`+N more`), and a notice appears once per container, withdrawn under 90%. Past three pressured containers the guard raises one grouped notice instead (`12 containers are close to their memory limits`, naming the worst three), so a fleet near its ceilings cannot push some of its warnings out of the three-row notice stack unseen.
 
 The notice's action opens the memory-limit dialog, updating in place through `docker update`. Three Docker rules: at least 6 MiB, never below what the container already holds, no removal — `docker update --memory 0` is accepted then ignored, so unlimited means recreating without `--memory`.
 

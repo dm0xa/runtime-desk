@@ -22,6 +22,9 @@ const END = "__events_end__";
 
 let channel: Channel<string> | null = null;
 let generation = 0;
+/** Starts and stops counted apart: an await that resumes must tell which one it lost to. */
+let starts = 0;
+let stops = 0;
 let timer: number | undefined;
 let listener: (() => void) | null = null;
 let streaming = false;
@@ -59,15 +62,30 @@ export async function startEventStream(onChange: () => void): Promise<void> {
     }, DEBOUNCE_MS);
   };
   channel = ch;
+  const mineStart = ++starts;
+  const mineStop = stops;
+  let live = false;
   try {
-    streaming = (await invoke<string>("events_start_cmd", { onEvent: ch })) === "streaming";
+    live = (await invoke<string>("events_start_cmd", { onEvent: ch })) === "streaming";
   } catch {
-    streaming = false;
+    live = false;
   }
+  // A newer start owns the child now (the backend kills the previous one), so late-arriving
+  // here must not claim or kill anything.
+  if (mineStart !== starts) return;
+  // A stop landed while this child was spawning: the stop ran before the child existed, so
+  // nobody else will end it. Kill the orphan instead of latching `streaming` on a child the
+  // App has already stopped caring about.
+  if (mineStop !== stops) {
+    if (live) void invoke("events_stop_cmd").catch(() => {});
+    return;
+  }
+  streaming = live;
 }
 
 export function stopEventStream(): void {
   generation++;
+  stops++;
   clearTimeout(timer);
   timer = undefined;
   listener = null;
