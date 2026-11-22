@@ -1137,10 +1137,14 @@ function App() {
    * A second request for the profile already being read joins that wave instead of starting
    * another; a request for a *different* profile starts its own and fences the older one, so
    * the previous daemon's rows can never land on top of the new profile's.
+   *
+   * `force` is for the two callers that know the data changed under the wave: the header's
+   * Refresh and anything `act()` just mutated. Joining a wave that started before a delete
+   * would list the deleted object until the next tick — up to 60 s with the event stream live.
    */
-  async function refresh(profile: string = selected, preloaded?: Profile[]): Promise<void> {
+  async function refresh(profile: string = selected, preloaded?: Profile[], force = false): Promise<void> {
     const running = refreshJob.current;
-    if (running && running.profile === profile) return running.p;
+    if (!force && running && running.profile === profile) return running.p;
     const gen = ++refreshGen.current;
     const job = { profile, gen, p: runRefresh(profile, gen, preloaded) };
     refreshJob.current = job;
@@ -1225,8 +1229,12 @@ function App() {
   async function pageRefresh() {
     setPageRefreshing(true);
     try {
-      await refresh();
-      await loadStatus(selected, true);
+      // The user asked: re-read even when a timer wave is in flight.
+      await refresh(selected, undefined, true);
+      // `colima status` costs 1.2 s and eight child processes, and none of its fields moves
+      // while the profile runs: every start, stop, restart and resize clears the 300 s cache.
+      // Asking for a forced read here made each Refresh pay it again to learn nothing.
+      await loadStatus(selected);
       if (tab === "cleanup") setCleanupNonce((n) => n + 1);
       else if (tab === "runtimes") await loadDiagnostics();
       else if (tab === "settings") await checkVersion();
@@ -1305,7 +1313,9 @@ function App() {
   }
   useEffect(() => {
     (async () => {
-      void loadVersion();
+      // `colima version` costs ~1.2 s and seven child processes, and its only reader is
+      // Settings › General, which runs its own check on open. Reading it at launch only
+      // competed with the boot wave for the same CLI.
       const list = await safe(invoke<Profile[]>("list_profiles_cmd"), []);
       setProfiles(list);
       const name = list.find((p) => p.name === selected)?.name ?? list[0]?.name ?? "";
@@ -1511,7 +1521,8 @@ function App() {
       } else if (verb) {
         pushNotice({ kind: "success", title: verb });
       }
-      await refresh(); await loadStatus(selected);
+      await refresh(selected, undefined, true);
+      await loadStatus(selected);
       setCleanupNonce((n) => n + 1);
     } catch (e) { reportProblem(e); }
     finally { setBusy(false); }
