@@ -45,6 +45,12 @@ let lastNet: { at: number; rx: number; tx: number } | null = null;
 /** When the last accounting tick landed. A gate that opens after a pause must not splice the
  *  new samples onto the old ones: the chart would claim a window it does not hold. */
 let lastTick = 0;
+/** When a sample last actually arrived. `snapshot.at` is the tick's stamp and moves even when
+ *  the child is silent, so only this can tell a stalled stream from a healthy one. */
+let newestSampleAt = 0;
+/** The profile the history belongs to. Two running profiles both keep the gate open, and the
+ *  sampler's child holds the endpoint it was started with: a switch must start a new recording. */
+let recordingProfile = "";
 const listeners = new Set<() => void>();
 
 function push(list: number[], value: number) {
@@ -92,6 +98,7 @@ function failed(e: unknown) {
   for (const list of Object.values(totals)) list.length = 0;
   lastNet = null;
   lastTick = 0;
+  newestSampleAt = 0;
   emit();
 }
 
@@ -102,7 +109,9 @@ function poll(): () => void {
     if (stopped) return;
     const began = Date.now();
     try {
-      apply(await invoke<ContainerStat[]>("container_stats_cmd"));
+      const stats = await invoke<ContainerStat[]>("container_stats_cmd");
+      newestSampleAt = Date.now();
+      apply(stats);
     } catch (e) {
       failed(e);
     }
@@ -128,6 +137,7 @@ async function stream(onEnd: () => void): Promise<(() => void) | null> {
       const stat = JSON.parse(line) as ContainerStat;
       // The CLI prints one transient row with an empty id while a container is created.
       if (!stat.id) return;
+      newestSampleAt = Date.now();
       latest.set(stat.id, stat);
       seen.add(stat.id);
       misses.delete(stat.id);
@@ -200,18 +210,24 @@ async function sample(gen: number) {
   };
 }
 
-/** Called by the App from the dependency gate; the only place sampling starts/stops. */
-export function setActivityActive(active: boolean) {
-  if (active === sampling) return;
+/** Called by the App from the dependency gate; the only place sampling starts/stops.
+ *  `profile` is the recording's identity: two running profiles both keep the gate open, and
+ *  `docker stats` was spawned against one endpoint, so a switch has to start a new recording
+ *  instead of splicing the second daemon's rows and totals onto the first's. */
+export function setActivityActive(active: boolean, profile = "") {
+  if (active === sampling && profile === recordingProfile) return;
+  const switched = profile !== recordingProfile;
+  recordingProfile = profile;
   sampling = active;
   generation++;
   stopSampling?.();
   stopSampling = null;
   latest = new Map();
   if (active) {
-    // More than two silent ticks is a new recording, not a continuation. Keeping the old
-    // samples would draw the pause as if samples had landed through it.
-    if (lastTick && Date.now() - lastTick > ACCOUNTING_MS * 2.5) {
+    // More than two silent ticks is a new recording, not a continuation, and another profile
+    // is a different daemon: either way the old samples would draw a window that never
+    // happened. A tab switch changes neither, so its history survives.
+    if (switched || (lastTick && Date.now() - lastTick > ACCOUNTING_MS * 2.5)) {
       history.clear();
       misses.clear();
       seen.clear();
@@ -219,6 +235,7 @@ export function setActivityActive(active: boolean) {
       snapshot = { stats: [], at: 0, error: null };
       lastNet = null;
       lastTick = 0;
+      newestSampleAt = 0;
     }
     void sample(generation);
   }
@@ -232,6 +249,12 @@ export function subscribeActivity(listener: () => void): () => void {
 
 export function activitySnapshot(): ActivitySnapshot {
   return snapshot;
+}
+
+/** When a sample last arrived (`0` before the first). `snapshot.at` moves every tick even
+ *  when the child is silent, so a stalled sampler is only visible through this. */
+export function activitySampleAt(): number {
+  return newestSampleAt;
 }
 
 /** Aggregate history across containers, newest right; at most SAMPLES entries. */
@@ -271,14 +294,36 @@ export function activityCpuPeak(samples = SAMPLES): number {
 /**
  * SVG polyline points for one container's CPU history, right-aligned so the newest sample sits at `width`.
  * `ceiling` lets several rows share a vertical scale; omit it to scale a row to its own peak.
+ *
+ * The ten-minute window holds 600 samples for a 120 px box: formatting all of them was 16.5 ms
+ * per tick at 200 containers (4.7× the two-minute window) for points no display can resolve.
+ * Past one point per pixel the samples are bucketed and each bucket keeps its maximum, so a
+ * spike still shows instead of being skipped by a stride.
  */
 export function activitySparkPoints(id: string, width: number, height: number, ceiling?: number, samples = SAMPLES): string {
   const data = (history.get(id)?.cpu ?? []).slice(-samples);
   if (data.length < 2) return "";
-  const peak = Math.max(ceiling ?? Math.max(...data), 1e-9);
+  const scale = Math.max(ceiling ?? Math.max(...data), 1e-9);
   const span = samples - 1;
   const offset = samples - data.length;
-  return data
-    .map((v, i) => `${(((offset + i) / span) * width).toFixed(1)},${(height - Math.min(1, v / peak) * height).toFixed(1)}`)
-    .join(" ");
+  const y = (v: number) => (height - Math.min(1, v / scale) * height).toFixed(1);
+  const points = Math.max(2, Math.ceil(width));
+  if (data.length <= points) {
+    return data.map((v, i) => `${(((offset + i) / span) * width).toFixed(1)},${y(v)}`).join(" ");
+  }
+  const per = data.length / points;
+  const out: string[] = [];
+  for (let b = 0; b < points; b++) {
+    const from = Math.floor(b * per);
+    const to = Math.min(data.length, Math.floor((b + 1) * per));
+    if (to <= from) continue;
+    let high = data[from];
+    for (let i = from + 1; i < to; i++) if (data[i] > high) high = data[i];
+    const x = ((offset + (from + to - 1) / 2) / span) * width;
+    out.push(`${x.toFixed(1)},${y(high)}`);
+  }
+  // The newest sample sits exactly at the right edge, as it does in the unbatched path: a
+  // bucket centre would leave the line ending visibly short of "now".
+  out.push(`${width.toFixed(1)},${y(data[data.length - 1])}`);
+  return out.join(" ");
 }

@@ -1340,9 +1340,13 @@ function App() {
     && profiles.some((p) => p.name === selected && p.status.toLowerCase() === "running")
     && (!!widgets.activity || tab === "activity" || (tab === "sherlock" && subject?.kind === "group"));
   useEffect(() => {
-    setActivityActive(activityReady);
-    return () => setActivityActive(false);
-  }, [activityReady]);
+    setActivityActive(activityReady, selected);
+    return () => setActivityActive(false, selected);
+    // `selected` is part of the gate, not just the boolean: two running profiles both leave
+    // `activityReady` true, and the sampler's child holds the endpoint it was started with.
+    // Without this the second profile's Activity page drew the first profile's rows and
+    // spliced its totals into the same history.
+  }, [activityReady, selected]);
   // OOM guard: it reads the stats the monitor already samples instead of adding a poll, so
   // it runs while the Activity card or page is on. A container crossing the pressure
   // threshold raises one notice; dropping back below it withdraws that notice.

@@ -165,7 +165,7 @@ One large component on purpose: views receive data and callbacks instead of fetc
 
 | Module | Responsibility |
 |---|---|
-| `activity.ts` | `container_stats_cmd` store behind Activity: 2 s minimum gap, 36-sample series, one in-flight call, subscriber fan-out, dead series dropped |
+| `activity.ts` | The Activity sampler: one long-lived `docker stats` stream with a 2 s poll fallback, 600-sample series at a 1 s accounting tick, one lifecycle per selected profile, per-tick subscriber fan-out, dead series dropped, newest-sample stamp for stall detection |
 | `stats.ts` | Sherlock's streaming `docker stats <id>` channel, with the `__stats_end__` polling fallback |
 | `stream.ts` | `docker events` consumer: 250 ms debounce, `exec_*` ignored |
 | `errors.ts` | `humanizeDockerError` / `humanizePodmanError` → `{ title, detail, evidence?, containerId? }` |
@@ -258,7 +258,7 @@ dropped connection or be parsed by the Docker decoder.
 
 ### Live activity
 
-`src/lib/activity.ts` is a module-level store with one sampling lifecycle: one `docker stats` child streams every container (`stats_all_start_cmd`), samples land in a `latest` map, and accounting runs once a second into per-container series capped at 600 points (ten minutes) plus totals; views slice the last 120 (`2 min`) or all 600 (`10 min`) through `src/lib/liveWindow.ts`. A container absent for two ticks is dropped with its series (the CLI stops reporting a container about a second after it exits), and an empty id is ignored because the CLI prints a transient creation row. `container_stats_cmd` on a two-second minimum gap is the fallback when the stream is refused or ends. Subscribers are notified once per accounting tick; a failed sample clears history and records the error. A gate that reopens after more than two silent ticks starts a new recording — history, totals and the last snapshot are cleared — because splicing new samples onto old ones would draw the pause as continuous history.
+`src/lib/activity.ts` is a module-level store with one sampling lifecycle: one `docker stats` child streams every container (`stats_all_start_cmd`), samples land in a `latest` map, and accounting runs once a second into per-container series capped at 600 points (ten minutes) plus totals; views slice the last 120 (`2 min`) or all 600 (`10 min`) through `src/lib/liveWindow.ts`, and a sparkline buckets those samples to about one point per pixel (keeping each bucket's maximum) because a 120 px box cannot resolve 600 points. A container absent for two ticks is dropped with its series (the CLI stops reporting a container about a second after it exits), and an empty id is ignored because the CLI prints a transient creation row. `container_stats_cmd` on a two-second minimum gap is the fallback when the stream is refused or ends. Subscribers are notified once per accounting tick; a failed sample clears history and records the error. A gate that reopens after more than two silent ticks starts a new recording — history, totals and the last snapshot are cleared — because splicing new samples onto old ones would draw the pause as continuous history.
 
 The App activates the store when:
 
@@ -272,11 +272,13 @@ activityReady =
 
 Views only subscribe, so switching tabs keeps history and hiding the card stops the call. The sampler is independent of `document.visibilityState` on purpose: one long-lived stream spawns nothing per tick, and pausing it on a window switch left the charts with a gap (the Sherlock group panel fell back to its "Collecting the first samples…" placeholder on return). List refreshes and the `docker events` stream stay visibility-gated — those spawn CLI children per run.
 
+The sampler's identity is the selected profile, not just "a profile is running": `docker stats` captured one endpoint when it spawned, so two running profiles would otherwise let the second page show the first daemon's rows and append its totals to the same series. A profile change clears the recording; a tab switch does not. `snapshot.at` is restamped on every accounting tick even when the child is silent, so the views' "no sample for Ns" line reads `activitySampleAt()`, the newest real sample.
+
 ### OOM guard
 
 `src/lib/memoryGuard.ts` holds the rule set, so the Activity page, notices and dialog cannot disagree. `memoryPressure(stats, vmBytes)` returns running containers at or above `PRESSURE_PCT` (90), worst first, marking one `unbounded` when the ceiling `docker stats` reported is within 2% of the profile's memory (`colima list --json` reports it in bytes), because Docker echoes the VM total back when no cgroup limit exists. `parseMemoryLimit` / `formatMemoryLimit` read and write the dialog's strings, rejecting zero, `unlimited`, `none` and anything below Docker's 6 MiB floor, which `docker update` would accept and ignore; a live container only loses a limit by being recreated.
 
-`App.tsx` evaluates pressure on every activity sample, so the guard costs no CLI calls; `pressuredRef` keeps one notice id per container, giving one alert per crossing and withdrawing it below the threshold. The notice opens `MemoryLimitDialog`, whose apply calls `container_update_memory_cmd` through `act()`.
+`App.tsx` evaluates pressure on every activity sample, so the guard costs no CLI calls; `pressuredRef` keeps one notice id per container, giving one alert per crossing and withdrawing it below the threshold. Past three pressured containers the guard raises one grouped notice naming the count and the worst three instead: the notice stack holds three, so per-container banners beyond it would be evicted while their ids stayed tracked, silently losing the alert. The notice opens `MemoryLimitDialog`, whose apply calls `container_update_memory_cmd` through `act()`.
 
 ### Notices and errors
 

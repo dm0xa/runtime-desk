@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ACTIVITY_STEP_MS, activityCpuPeak, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
+import { ACTIVITY_STEP_MS, activityCpuPeak, activitySampleAt, activitySnapshot, activitySparkPoints, activityTotals, subscribeActivity, type ActivitySnapshot } from "../lib/activity";
 import { fmtBytes, fmtSize, fmtSpan } from "../lib/format";
 import { isKubernetesName } from "../lib/origin";
 import { memoryPressure } from "../lib/memoryGuard";
@@ -52,8 +52,26 @@ export function ActivityPage({ toolOk, profileRunning, profile, vmMemoryBytes, o
   /** The monitor starts when this page mounts, so the first tick has no sample to show. The
    *  page must say "reading" instead of asserting 0% and "No running containers". */
   const loading = toolOk && profileRunning && !snap.error && snap.at === 0;
-  const staleSeconds = snap.at > 0 ? Math.round((Date.now() - snap.at) / 1000) : 0;
-  const stale = toolOk && profileRunning && !snap.error && staleSeconds > 6;
+  /** `snap.at` is the accounting tick's stamp and moves even when the child says nothing, so
+   *  only the last real sample can tell a stalled stream from a healthy one. The 1 s check
+   *  re-renders when the verdict flips (and while a gap lasts, so the count keeps up), never
+   *  on a healthy page whose samples arrive every second. */
+  const [gap, setGap] = useState({ stale: false, seconds: 0 });
+  useEffect(() => {
+    const check = () => {
+      const at = activitySampleAt();
+      const seconds = at > 0 ? Math.floor((Date.now() - at) / 1000) : 0;
+      const stale = toolOk && profileRunning && !snap.error && seconds > 6;
+      setGap((prev) => (prev.stale === stale && (!stale || prev.seconds === seconds)
+        ? prev
+        : { stale, seconds }));
+    };
+    check();
+    const id = setInterval(check, 1000);
+    return () => clearInterval(id);
+  }, [toolOk, profileRunning, snap.error]);
+  const stale = gap.stale;
+  const staleSeconds = gap.seconds;
 
   return (
     <div className="activity-page">
