@@ -618,11 +618,22 @@ fn stats_all_stop_cmd(state: tauri::State<'_, ActivityStream>) -> R<String> {
 }
 
 #[tauri::command]
-fn open_url_cmd(url: String) -> R<String> {
+async fn open_url_cmd(url: String) -> R<String> {
     if !is_openable_url(&url) {
         return Err("only http and https links can be opened".into());
     }
-    std::process::Command::new("open").arg(&url).output().map(|_| format!("Opened {url}")).map_err(|e| e.to_string())
+    // `open` answers LaunchServices and waits for it: on the event-loop thread (where a sync
+    // command runs) that wait froze the window, so it takes the blocking pool like every
+    // other child process. The exit status is ignored, as it was before: a URL the system
+    // does not handle still reports that it was opened.
+    blocking(move || {
+        std::process::Command::new("open")
+            .arg(&url)
+            .output()
+            .map(|_| format!("Opened {url}"))
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
